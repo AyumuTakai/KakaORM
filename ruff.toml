@@ -1,0 +1,4 @@
+[lint]
+# E712: ORM の ColumnMeta.__eq__ オーバーロードが == True / == False を
+# SQL WHERE 句生成に使うため、ブール比較の警告を無効化する。
+ignore = ["E712"]

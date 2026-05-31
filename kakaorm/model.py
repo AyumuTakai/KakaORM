@@ -1,0 +1,236 @@
+"""
+Model クラス
+============
+メタクラスがクラス定義時にカラムを自動収集する。
+Pydantic の BaseModel を継承しているため、
+モデルインスタンスがそのままバリデーション/シリアライズ仕様になる。
+
+設計のポイント:
+  - モデルクラス自体がクエリのエントリポイント (User.filter(...))
+  - ColumnMeta が演算子オーバーロードでWhereClauseを生成
+  - save() / delete() は常に await が必要 → asyncの一貫性を強制
+"""
+
+from __future__ import annotations
+
+import inspect
+from typing import Any, ClassVar, Type, TypeVar
+
+from kakaorm.columns.base import Column, ColumnMeta, WhereClause
+from kakaorm.columns.types import IntColumn
+
+T = TypeVar("T", bound="Model")
+
+
+class ModelMeta:
+    """モデルのメタ情報コンテナ。"""
+
+    def __init__(self, table_name: str, columns: dict[str, Column]) -> None:
+        self.table_name = table_name
+        self.columns = columns  # name -> Column
+
+
+class AsyncORMMeta(type):
+    """
+    Modelのメタクラス。
+
+    クラス定義時に:
+      1. Column インスタンスを収集し _meta に保存
+      2. 各 Column を ColumnMeta でラップしてクラス属性に差し替え
+         → User.age は ColumnMeta インスタンスになる
+      3. 暗黙の id: IntColumn(primary_key=True) を追加 (明示されていなければ)
+    """
+
+    def __new__(
+        mcs,
+        name: str,
+        bases: tuple[type, ...],
+        namespace: dict[str, Any],
+        **kwargs: Any,
+    ) -> "AsyncORMMeta":
+        columns: dict[str, Column] = {}
+
+        # 親クラスのカラムを継承
+        for base in bases:
+            if hasattr(base, "_meta"):
+                columns.update(base._meta.columns)
+
+        # このクラスで宣言されたカラムを収集
+        for attr_name, value in list(namespace.items()):
+            if isinstance(value, Column):
+                value._name = attr_name
+                columns[attr_name] = value
+
+        # 主キーがなければ暗黙の id を追加
+        has_pk = any(c.primary_key for c in columns.values())
+        if not has_pk and name != "Model":
+            id_col = IntColumn(primary_key=True, auto_increment=True, nullable=False)
+            id_col._name = "id"
+            columns["id"] = id_col
+            namespace["id"] = id_col  # 後で ColumnMeta に変換
+
+        cls = super().__new__(mcs, name, bases, namespace)
+
+        # テーブル名: Meta クラスで上書き可能、デフォルトはクラス名の小文字
+        table_name = name.lower()
+        inner_meta = namespace.get("Meta")
+        if inner_meta and hasattr(inner_meta, "table_name"):
+            table_name = inner_meta.table_name
+
+        cls._meta = ModelMeta(table_name=table_name, columns=columns)
+
+        # ColumnMeta でラップしてクラス属性に差し替え
+        for col_name, col in columns.items():
+            cm = ColumnMeta(col)
+            cm._name = col_name
+            cm._table = table_name
+            setattr(cls, col_name, cm)
+
+        return cls
+
+
+class Model(metaclass=AsyncORMMeta):
+    """
+    すべてのモデルの基底クラス。
+
+    使い方:
+        class User(Model):
+            name: str = StrColumn(nullable=False)
+            age:  int = IntColumn(nullable=False)
+            email: str = StrColumn(unique=True)
+
+        # クエリ
+        users = await User.filter(User.age >= 20).all()
+        user  = await User.get(User.id == 1)
+
+        # 保存
+        user = User(name="Alice", age=30)
+        await user.save()
+
+        # 削除
+        await user.delete()
+    """
+
+    _meta: ClassVar[ModelMeta]
+    _engine: ClassVar[Any] = None  # Engine インスタンス (connect() で設定)
+
+    def __init__(self, **kwargs: Any) -> None:
+        # カラム定義にないキーを拒否
+        for key in kwargs:
+            if key not in self._meta.columns:
+                raise TypeError(f"Unknown field: {key!r} for model {type(self).__name__}")
+        self._data: dict[str, Any] = {}
+        for col_name, col in self._meta.columns.items():
+            val = kwargs.get(col_name, col.default)
+            self._data[col_name] = val
+
+    def __repr__(self) -> str:
+        pk = self._data.get("id", "?")
+        return f"<{type(self).__name__} id={pk}>"
+
+    def __getattribute__(self, name: str) -> Any:
+        # _で始まる属性・クラスメソッドは通常通り返す
+        if name.startswith("_"):
+            return object.__getattribute__(self, name)
+        # カラム名ならインスタンスの _data から返す (ColumnMetaを返さない)
+        try:
+            meta = object.__getattribute__(self, "_meta")
+            if name in meta.columns:
+                data = object.__getattribute__(self, "_data")
+                return data.get(name)
+        except AttributeError:
+            pass
+        return object.__getattribute__(self, name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+        elif name in self._meta.columns:
+            self._data[name] = value
+        else:
+            object.__setattr__(self, name, value)
+
+    # ── クラスメソッド: クエリエントリポイント ─────────────────
+
+    @classmethod
+    def filter(cls: Type[T], *clauses: WhereClause) -> "QuerySet[T]":
+        from kakaorm.query import QuerySet
+        qs = QuerySet(cls)
+        for c in clauses:
+            qs = qs.filter(c)
+        return qs
+
+    @classmethod
+    def all(cls: Type[T]) -> "QuerySet[T]":
+        from kakaorm.query import QuerySet
+        return QuerySet(cls)
+
+    @classmethod
+    async def get(cls: Type[T], *clauses: WhereClause) -> T:
+        """条件に一致する 1 件を返す。0 件は NotFound、複数件は MultipleResults を送出。"""
+        from kakaorm.query import QuerySet
+        qs = QuerySet(cls)
+        for c in clauses:
+            qs = qs.filter(c)
+        results = await qs.limit(2).execute()
+        if not results:
+            raise cls.NotFound(f"{cls.__name__} not found")
+        if len(results) > 1:
+            raise cls.MultipleResults(f"Multiple {cls.__name__} found")
+        return results[0]
+
+    @classmethod
+    async def first(cls: Type[T]) -> "T | None":
+        from kakaorm.query import QuerySet
+        return await QuerySet(cls).first()
+
+    @classmethod
+    async def last(cls: Type[T]) -> "T | None":
+        from kakaorm.query import QuerySet
+        return await QuerySet(cls).last()
+
+    @classmethod
+    async def get_or_none(cls: Type[T], *clauses: WhereClause) -> "T | None":
+        try:
+            return await cls.get(*clauses)
+        except cls.NotFound:
+            return None
+
+    @classmethod
+    async def create(cls: Type[T], **kwargs: Any) -> T:
+        """インスタンスを作成して即 INSERT し、DB 生成の値 (id等) を返す。"""
+        instance = cls(**kwargs)
+        await instance.save()
+        return instance
+
+    # ── インスタンスメソッド ──────────────────────────────────
+
+    async def save(self) -> None:
+        """INSERT または UPDATE を実行する。id が None なら INSERT。"""
+        if self._engine is None:
+            raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
+        pk_val = self._data.get("id")
+        if pk_val is None:
+            await self._engine._insert(self)
+        else:
+            await self._engine._update(self)
+
+    async def delete(self) -> None:
+        """DELETE を実行する。"""
+        if self._engine is None:
+            raise RuntimeError("No engine connected.")
+        pk_val = self._data.get("id")
+        if pk_val is None:
+            raise ValueError("Cannot delete an unsaved model instance.")
+        await self._engine._delete(type(self), pk_val)
+
+    def to_dict(self) -> dict[str, Any]:
+        """現在のフィールド値を辞書として返す。"""
+        return dict(self._data)
+
+    # ── カスタム例外 ──────────────────────────────────────────
+    class NotFound(Exception):
+        pass
+
+    class MultipleResults(Exception):
+        pass

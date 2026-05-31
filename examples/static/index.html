@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Todo</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:           #F2EDE4;
+      --surface:      #FDFBF8;
+      --border:       #DDD6CB;
+      --border-focus: #B5A898;
+      --text:         #1C1916;
+      --text-sub:     #6B6259;
+      --text-muted:   #A39890;
+      --accent:       #C05621;
+      --accent-dark:  #9A4318;
+      --done:         #B0A89E;
+      --error-bg:     #FEF2F2;
+      --error-border: #FECACA;
+      --error-text:   #991B1B;
+      --radius:       3px;
+      --shadow-sm:    0 1px 2px rgba(0,0,0,.05);
+      --shadow-md:    0 3px 10px rgba(0,0,0,.08);
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: Georgia, 'Times New Roman', serif;
+      min-height: 100vh;
+      padding: 52px 20px 100px;
+    }
+
+    .container { max-width: 580px; margin: 0 auto; }
+
+    /* ── Header ─────────────────────────────────────── */
+    header { margin-bottom: 44px; }
+
+    .rule-top {
+      height: 3px;
+      background: var(--text);
+      margin-bottom: 14px;
+    }
+
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    h1 {
+      font-size: clamp(2.2rem, 7vw, 3.8rem);
+      font-weight: normal;
+      letter-spacing: -0.03em;
+      line-height: 1;
+    }
+
+    .header-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+    }
+
+    .stamp {
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    #counter {
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+      min-height: 14px;
+      transition: opacity 0.3s;
+    }
+
+    .rule-bottom {
+      height: 1px;
+      background: var(--border);
+      margin-top: 14px;
+    }
+
+    /* ── Form ───────────────────────────────────────── */
+    .form-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 22px 22px 18px;
+      box-shadow: var(--shadow-sm);
+      margin-bottom: 36px;
+    }
+
+    .field {
+      position: relative;
+      margin-bottom: 14px;
+    }
+
+    .field label {
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      display: block;
+      margin-bottom: 6px;
+    }
+
+    .field input,
+    .field textarea {
+      width: 100%;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--border);
+      padding: 6px 0 8px;
+      font-family: Georgia, serif;
+      font-size: 15px;
+      color: var(--text);
+      outline: none;
+      transition: border-color 0.2s;
+      resize: none;
+    }
+
+    .field textarea { min-height: 50px; line-height: 1.55; }
+
+    .field input::placeholder,
+    .field textarea::placeholder { color: var(--text-muted); font-style: italic; }
+
+    .field input:focus,
+    .field textarea:focus { border-bottom-color: var(--accent); }
+
+    .form-footer {
+      display: flex;
+      justify-content: flex-end;
+      padding-top: 4px;
+    }
+
+    .btn-add {
+      background: var(--text);
+      color: var(--surface);
+      border: none;
+      padding: 8px 22px;
+      font-family: 'Courier New', monospace;
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      cursor: pointer;
+      border-radius: var(--radius);
+      transition: background 0.18s, transform 0.1s;
+    }
+
+    .btn-add:hover:not(:disabled) { background: var(--accent); }
+    .btn-add:active:not(:disabled) { transform: scale(0.97); }
+    .btn-add:disabled { opacity: 0.38; cursor: not-allowed; }
+
+    /* ── Error ──────────────────────────────────────── */
+    #error-box {
+      background: var(--error-bg);
+      border: 1px solid var(--error-border);
+      color: var(--error-text);
+      padding: 10px 14px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      margin-bottom: 14px;
+      display: none;
+    }
+
+    #error-box.show {
+      display: block;
+      animation: shake 0.28s ease;
+    }
+
+    @keyframes shake {
+      0%,100% { transform: translateX(0); }
+      25%      { transform: translateX(-5px); }
+      75%      { transform: translateX(5px); }
+    }
+
+    /* ── Section label ──────────────────────────────── */
+    .section-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .section-label {
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .section-rule { flex: 1; height: 1px; background: var(--border); }
+
+    /* ── Todo list ──────────────────────────────────── */
+    #todo-list { display: flex; flex-direction: column; gap: 7px; }
+
+    .empty-state {
+      text-align: center;
+      padding: 56px 24px;
+      color: var(--text-muted);
+    }
+
+    .empty-state p { font-style: italic; font-size: 15px; line-height: 1.7; }
+
+    .loading {
+      display: flex;
+      justify-content: center;
+      padding: 48px;
+    }
+
+    .dots { display: inline-flex; gap: 5px; }
+
+    .dots span {
+      width: 5px; height: 5px;
+      background: var(--text-muted);
+      border-radius: 50%;
+      animation: dot 1.1s ease-in-out infinite;
+    }
+
+    .dots span:nth-child(2) { animation-delay: .18s; }
+    .dots span:nth-child(3) { animation-delay: .36s; }
+
+    @keyframes dot {
+      0%,80%,100% { transform: translateY(0); opacity: .35; }
+      40%          { transform: translateY(-5px); opacity: 1; }
+    }
+
+    /* ── Todo item ──────────────────────────────────── */
+    .todo-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 13px 14px 13px 16px;
+      display: flex;
+      align-items: flex-start;
+      gap: 13px;
+      box-shadow: var(--shadow-sm);
+      transition:
+        box-shadow .2s,
+        transform  .18s,
+        border-left-color .3s,
+        opacity .2s;
+      animation: appear .22s ease;
+    }
+
+    @keyframes appear {
+      from { opacity: 0; transform: translateY(5px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .todo-item:hover {
+      box-shadow: var(--shadow-md);
+      transform: translateY(-1px);
+    }
+
+    .todo-item.done { border-left-color: var(--done); }
+
+    .todo-item.out {
+      opacity: 0 !important;
+      transform: translateX(16px) !important;
+      pointer-events: none;
+    }
+
+    /* Checkbox */
+    .cb {
+      appearance: none;
+      -webkit-appearance: none;
+      flex-shrink: 0;
+      width: 17px; height: 17px;
+      border: 1.5px solid var(--border);
+      border-radius: 50%;
+      cursor: pointer;
+      position: relative;
+      margin-top: 2px;
+      transition: border-color .2s, background .2s;
+    }
+
+    .cb:hover { border-color: var(--accent); }
+
+    .cb:checked {
+      background: var(--done);
+      border-color: var(--done);
+    }
+
+    .cb:checked::after {
+      content: '';
+      position: absolute;
+      top: 3px; left: 2.5px;
+      width: 9px; height: 5px;
+      border-left:   1.5px solid #fff;
+      border-bottom: 1.5px solid #fff;
+      transform: rotate(-45deg);
+    }
+
+    /* Content */
+    .todo-body { flex: 1; min-width: 0; }
+
+    .todo-id {
+      font-family: 'Courier New', monospace;
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      margin-bottom: 3px;
+    }
+
+    .todo-title {
+      font-size: 15px;
+      line-height: 1.45;
+      word-break: break-word;
+      transition: color .25s;
+    }
+
+    .done .todo-title {
+      text-decoration: line-through;
+      color: var(--text-muted);
+    }
+
+    .todo-desc {
+      font-size: 13px;
+      color: var(--text-sub);
+      font-style: italic;
+      line-height: 1.55;
+      margin-top: 4px;
+      word-break: break-word;
+    }
+
+    .done .todo-desc { color: var(--text-muted); }
+
+    /* Delete */
+    .btn-del {
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 17px;
+      line-height: 1;
+      padding: 1px 3px;
+      border-radius: 2px;
+      opacity: 0;
+      transition: opacity .18s, color .18s;
+      margin-top: 1px;
+    }
+
+    .todo-item:hover .btn-del { opacity: 1; }
+    .btn-del:hover { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<div class="container">
+
+  <header>
+    <div class="rule-top"></div>
+    <div class="header-row">
+      <h1>Todo</h1>
+      <div class="header-right">
+        <span class="stamp">Task Manager</span>
+        <span id="counter"></span>
+      </div>
+    </div>
+    <div class="rule-bottom"></div>
+  </header>
+
+  <div id="error-box" role="alert"></div>
+
+  <div class="form-card">
+    <form id="add-form">
+      <div class="field">
+        <label for="inp-title">タスク</label>
+        <input id="inp-title" type="text" placeholder="新しいタスクを入力…" autocomplete="off" required>
+      </div>
+      <div class="field">
+        <label for="inp-desc">詳細（任意）</label>
+        <textarea id="inp-desc" placeholder="補足メモ…" rows="2"></textarea>
+      </div>
+      <div class="form-footer">
+        <button type="submit" class="btn-add" id="btn-add">追加</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="section-head">
+    <span class="section-label">Tasks</span>
+    <div class="section-rule"></div>
+  </div>
+
+  <div id="todo-list"></div>
+
+</div>
+
+<script>
+  const listEl   = document.getElementById('todo-list');
+  const form     = document.getElementById('add-form');
+  const inpTitle = document.getElementById('inp-title');
+  const inpDesc  = document.getElementById('inp-desc');
+  const btnAdd   = document.getElementById('btn-add');
+  const errorBox = document.getElementById('error-box');
+  const counterEl = document.getElementById('counter');
+
+  let todos = [];
+  const nodeMap = new Map(); // id → DOM element
+
+  /* ── API helper ─────────────────────────────────── */
+  async function req(method, path, body) {
+    const res = await fetch(path, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body:    body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok && res.status !== 204) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `HTTP ${res.status}`);
+    }
+    return res.status === 204 ? null : res.json();
+  }
+
+  /* ── Error display ──────────────────────────────── */
+  let errorTimer;
+  function showError(msg) {
+    errorBox.textContent = msg;
+    errorBox.className = '';
+    void errorBox.offsetWidth;
+    errorBox.className = 'show';
+    clearTimeout(errorTimer);
+    errorTimer = setTimeout(() => { errorBox.className = ''; }, 4000);
+  }
+
+  /* ── Counter ────────────────────────────────────── */
+  function refreshCounter() {
+    if (todos.length === 0) { counterEl.textContent = ''; return; }
+    const done = todos.filter(t => t.completed).length;
+    counterEl.textContent = `${done} / ${todos.length} 完了`;
+  }
+
+  /* ── Escape HTML ────────────────────────────────── */
+  function esc(s) {
+    return String(s)
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;');
+  }
+
+  /* ── Create DOM element ─────────────────────────── */
+  function createEl(todo) {
+    const el = document.createElement('div');
+    el.className = 'todo-item' + (todo.completed ? ' done' : '');
+    el.dataset.id = todo.id;
+
+    el.innerHTML = `
+      <input type="checkbox" class="cb" ${todo.completed ? 'checked' : ''} aria-label="完了">
+      <div class="todo-body">
+        <div class="todo-id">#${String(todo.id).padStart(3,'0')}</div>
+        <div class="todo-title"></div>
+      </div>
+      <button class="btn-del" title="削除" aria-label="削除">×</button>`;
+
+    el.querySelector('.todo-title').textContent = todo.title;
+
+    if (todo.description) {
+      const d = document.createElement('p');
+      d.className = 'todo-desc';
+      d.textContent = todo.description;
+      el.querySelector('.todo-body').appendChild(d);
+    }
+
+    el.querySelector('.cb').addEventListener('change', async (e) => {
+      const checked = e.target.checked;
+      try {
+        const updated = await req('PATCH', `/todos/${todo.id}`, { completed: checked });
+        const t = todos.find(t => t.id === todo.id);
+        if (t) t.completed = updated.completed;
+        el.classList.toggle('done', updated.completed);
+        refreshCounter();
+      } catch (err) {
+        e.target.checked = !checked;
+        showError(err.message);
+      }
+    });
+
+    el.querySelector('.btn-del').addEventListener('click', async () => {
+      el.classList.add('out');
+      try {
+        await req('DELETE', `/todos/${todo.id}`);
+        setTimeout(() => {
+          todos = todos.filter(t => t.id !== todo.id);
+          nodeMap.delete(todo.id);
+          el.remove();
+          refreshCounter();
+          if (todos.length === 0) renderEmpty();
+        }, 210);
+      } catch (err) {
+        el.classList.remove('out');
+        showError(err.message);
+      }
+    });
+
+    return el;
+  }
+
+  /* ── Render helpers ─────────────────────────────── */
+  function renderEmpty() {
+    listEl.innerHTML = `
+      <div class="empty-state">
+        <p>タスクがありません。<br>上のフォームから追加してください。</p>
+      </div>`;
+  }
+
+  function renderLoading() {
+    listEl.innerHTML = `
+      <div class="loading">
+        <div class="dots"><span></span><span></span><span></span></div>
+      </div>`;
+  }
+
+  function renderAll() {
+    listEl.innerHTML = '';
+    nodeMap.clear();
+    if (todos.length === 0) { renderEmpty(); return; }
+    todos.forEach(t => {
+      const el = createEl(t);
+      nodeMap.set(t.id, el);
+      listEl.appendChild(el);
+    });
+    refreshCounter();
+  }
+
+  /* ── Load ───────────────────────────────────────── */
+  async function load() {
+    renderLoading();
+    try {
+      todos = await req('GET', '/todos');
+      renderAll();
+    } catch (err) {
+      listEl.innerHTML = '';
+      showError('読み込みに失敗しました: ' + err.message);
+    }
+  }
+
+  /* ── Add ────────────────────────────────────────── */
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const title = inpTitle.value.trim();
+    if (!title) return;
+    btnAdd.disabled = true;
+    try {
+      const todo = await req('POST', '/todos', {
+        title,
+        description: inpDesc.value.trim() || undefined,
+      });
+      todos.push(todo);
+
+      // Remove empty state if present
+      const empty = listEl.querySelector('.empty-state');
+      if (empty) empty.remove();
+
+      const el = createEl(todo);
+      nodeMap.set(todo.id, el);
+      listEl.appendChild(el);
+      refreshCounter();
+
+      inpTitle.value = '';
+      inpDesc.value  = '';
+      inpTitle.focus();
+    } catch (err) {
+      showError(err.message);
+    } finally {
+      btnAdd.disabled = false;
+    }
+  });
+
+  load();
+</script>
+</body>
+</html>
