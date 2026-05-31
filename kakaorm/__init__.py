@@ -17,10 +17,24 @@ asyncpg / psycopg3 / aiosqlite のどれを使っても同じ API で動く。
 
 from __future__ import annotations
 
+import contextvars
 import re
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager
 from typing import Any, Type
 from urllib.parse import urlparse
+
+# ── トランザクション用 ContextVar ─────────────────────────────
+# asyncio タスクごとに独立した値を持つため、並列リクエストが干渉しない。
+
+# SQLite: トランザクション中は auto-commit を抑制するフラグ
+_in_tx: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "kakaorm_in_tx", default=False
+)
+# プール型 Engine: トランザクション専用の接続を保持
+_tx_conn: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "kakaorm_tx_conn", default=None
+)
 
 
 # ── 抽象 Engine ───────────────────────────────────────────────
@@ -50,6 +64,24 @@ class Engine(ABC):
     @abstractmethod
     async def _fetchval(self, sql: str, params: list[Any]) -> Any:
         """スカラー値を 1 つ返す (COUNT など)。"""
+
+    @asynccontextmanager
+    async def transaction(self):
+        """
+        トランザクションを開始するコンテキストマネージャ。
+        正常終了でコミット、例外発生でロールバックする。
+
+        使い方::
+
+            async with engine.transaction():
+                await Order.create(...)
+                await Stock.filter(...).update(qty=Stock.qty - 1)
+                # 例外があれば自動ロールバック
+
+        サブクラスでオーバーライドして実装する。
+        """
+        raise NotImplementedError(f"{type(self).__name__} は transaction() を実装していません")
+        yield  # asynccontextmanager として認識させるために必要
 
     # ── ORM 内部から呼ばれる操作 ─────────────────────────────
 
@@ -162,20 +194,42 @@ class AsyncpgEngine(Engine):
             await self._pool.close()
 
     async def _fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        conn = _tx_conn.get()
+        if conn:
+            rows = await conn.fetch(sql, *params)
+            return [dict(r) for r in rows]
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(sql, *params)
             return [dict(r) for r in rows]
 
     async def _execute(self, sql: str, params: list[Any]) -> int:
+        conn = _tx_conn.get()
+        if conn:
+            result = await conn.execute(sql, *params)
+            match = re.search(r"\d+$", result)
+            return int(match.group()) if match else 0
         async with self._pool.acquire() as conn:
             result = await conn.execute(sql, *params)
-            # asyncpg は "UPDATE 3" のような文字列を返す
             match = re.search(r"\d+$", result)
             return int(match.group()) if match else 0
 
     async def _fetchval(self, sql: str, params: list[Any]) -> Any:
+        conn = _tx_conn.get()
+        if conn:
+            return await conn.fetchval(sql, *params)
         async with self._pool.acquire() as conn:
             return await conn.fetchval(sql, *params)
+
+    @asynccontextmanager
+    async def transaction(self):
+        """asyncpg トランザクション。専用接続を ContextVar に保持する。"""
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                token = _tx_conn.set(conn)
+                try:
+                    yield conn
+                finally:
+                    _tx_conn.reset(token)
 
 
 # ── aiosqlite Engine ─────────────────────────────────────────
@@ -212,10 +266,11 @@ class AioSQLiteEngine(Engine):
 
     async def _execute(self, sql: str, params: list[Any]) -> int:
         sql = self._normalize_sql(sql)
-        # RETURNING 句を除去 (SQLite は lastrowid で代替)
         sql_exec = re.sub(r"\s+RETURNING\s+\w+", "", sql, flags=re.IGNORECASE)
         async with self._conn.execute(sql_exec, params) as cursor:
-            await self._conn.commit()
+            # トランザクション中は commit を抑制する
+            if not _in_tx.get():
+                await self._conn.commit()
             return cursor.rowcount if cursor.rowcount >= 0 else 0
 
     async def _fetchval(self, sql: str, params: list[Any]) -> Any:
@@ -224,11 +279,25 @@ class AioSQLiteEngine(Engine):
         has_returning = "RETURNING" in sql.upper()
         sql_exec = re.sub(r"\s+RETURNING\s+\w+", "", sql_exec, flags=re.IGNORECASE)
         async with self._conn.execute(sql_exec, params) as cursor:
-            await self._conn.commit()
+            if not _in_tx.get():
+                await self._conn.commit()
             if has_returning:
                 return cursor.lastrowid
             row = await cursor.fetchone()
             return row[0] if row else None
+
+    @asynccontextmanager
+    async def transaction(self):
+        """SQLite トランザクション。auto-commit を抑制し、終了時に commit/rollback。"""
+        token = _in_tx.set(True)
+        try:
+            yield self
+            await self._conn.commit()
+        except Exception:
+            await self._conn.rollback()
+            raise
+        finally:
+            _in_tx.reset(token)
 
     async def create_table(self, model_cls: Any, *, if_not_exists: bool = True) -> None:
         """SQLite 用: SERIAL → INTEGER PRIMARY KEY AUTOINCREMENT"""
@@ -308,14 +377,24 @@ class AioMySQLEngine(Engine):
 
     async def _fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
         import aiomysql  # type: ignore
+        conn = _tx_conn.get()
+        if conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(sql, params)
+                rows = await cur.fetchall()
+                return [{k.lower(): v for k, v in row.items()} for row in rows]
         async with self._pool.acquire() as conn:
             async with conn.cursor(aiomysql.DictCursor) as cur:
                 await cur.execute(sql, params)
                 rows = await cur.fetchall()
-                # aiomysql DictCursor はキーを大文字で返す場合があるため小文字に統一
                 return [{k.lower(): v for k, v in row.items()} for row in rows]
 
     async def _execute(self, sql: str, params: list[Any]) -> int:
+        conn = _tx_conn.get()
+        if conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, params)
+                return cur.rowcount if cur.rowcount >= 0 else 0
         async with self._pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(sql, params)
@@ -325,6 +404,14 @@ class AioMySQLEngine(Engine):
         """INSERT RETURNING id を MySQL の lastrowid で代替。"""
         has_returning = "RETURNING" in sql.upper()
         sql_exec = re.sub(r"\s+RETURNING\s+\w+", "", sql, flags=re.IGNORECASE)
+        conn = _tx_conn.get()
+        if conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql_exec, params)
+                if has_returning:
+                    return cur.lastrowid
+                row = await cur.fetchone()
+                return row[0] if row else None
         async with self._pool.acquire() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(sql_exec, params)
@@ -332,6 +419,21 @@ class AioMySQLEngine(Engine):
                     return cur.lastrowid
                 row = await cur.fetchone()
                 return row[0] if row else None
+
+    @asynccontextmanager
+    async def transaction(self):
+        """aiomysql トランザクション。autocommit=False の専用接続を使う。"""
+        async with self._pool.acquire() as conn:
+            await conn.begin()
+            token = _tx_conn.set(conn)
+            try:
+                yield conn
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+            finally:
+                _tx_conn.reset(token)
 
     async def create_table(self, model_cls: Any, *, if_not_exists: bool = True) -> None:
         """MySQL 用: SERIAL → INT AUTO_INCREMENT、TIMESTAMP WITH TIME ZONE → DATETIME"""
@@ -376,6 +478,13 @@ class Psycopg3Engine(Engine):
             await self._pool.close()
 
     async def _fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        conn = _tx_conn.get()
+        if conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, params)
+                rows = await cur.fetchall()
+                cols = [d.name for d in cur.description] if cur.description else []
+                return [dict(zip(cols, row)) for row in rows]
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(sql, params)
@@ -384,17 +493,39 @@ class Psycopg3Engine(Engine):
                 return [dict(zip(cols, row)) for row in rows]
 
     async def _execute(self, sql: str, params: list[Any]) -> int:
+        conn = _tx_conn.get()
+        if conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, params)
+                return cur.rowcount
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(sql, params)
                 return cur.rowcount
 
     async def _fetchval(self, sql: str, params: list[Any]) -> Any:
+        conn = _tx_conn.get()
+        if conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, params)
+                row = await cur.fetchone()
+                return row[0] if row else None
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute(sql, params)
                 row = await cur.fetchone()
                 return row[0] if row else None
+
+    @asynccontextmanager
+    async def transaction(self):
+        """psycopg3 トランザクション。専用接続を ContextVar に保持する。"""
+        async with self._pool.connection() as conn:
+            async with conn.transaction():
+                token = _tx_conn.set(conn)
+                try:
+                    yield conn
+                finally:
+                    _tx_conn.reset(token)
 
 
 # ── ファクトリ関数 ────────────────────────────────────────────
