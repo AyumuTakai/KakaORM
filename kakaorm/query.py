@@ -17,7 +17,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Generic, Type, TypeVar
 
-from kakaorm.columns.base import AggFunc, Avg, ColumnCompare, Count, Max, Min, Sum, UpdateExpr, WhereClause
+from kakaorm.columns.base import AggFunc, Avg, Case, ColumnCompare, Count, Max, Min, Sum, UpdateExpr, WhereClause
 
 T = TypeVar("T", bound="Model")  # type: ignore[type-arg]
 
@@ -71,7 +71,7 @@ class QuerySet(Generic[T]):
         self._order_by: list[str] = []
         self._limit_val: int | None = None
         self._offset_val: int | None = None
-        self._select_cols: list[str] | None = None  # SQL 式のリスト。None = SELECT *
+        self._select_cols: list[tuple[str, list[Any]]] | None = None  # (sql_expr, params) のリスト。None = SELECT *
         self._group_by: list[str] = []
         self._having: list[WhereClause] = []
         self._joins: list[JoinClause] = []
@@ -118,18 +118,22 @@ class QuerySet(Generic[T]):
 
     def select(self, *exprs: Any) -> "QuerySet[T]":
         """
-        取得する列・集計式を指定する。
-        ColumnMeta / AggFunc を混在して渡せる。
+        取得する列・集計式・CASE WHEN 式を指定する。
+        ColumnMeta / AggFunc / Case を混在して渡せる。
         """
         qs = self._clone()
-        cols: list[str] = []
+        cols: list[tuple[str, list[Any]]] = []
         for expr in exprs:
-            if isinstance(expr, AggFunc):
-                cols.append(expr._sql_expr())
+            if isinstance(expr, Case):
+                sql, params = expr._build()
+                alias = f" AS {expr._alias}" if expr._alias else ""
+                cols.append((f"({sql}){alias}", params))
+            elif isinstance(expr, AggFunc):
+                cols.append((expr._sql_expr(), []))
             elif hasattr(expr, "_qualified"):
-                cols.append(expr._qualified())
+                cols.append((expr._qualified(), []))
             else:
-                cols.append(str(expr))
+                cols.append((str(expr), []))
         qs._select_cols = cols
         return qs
 
@@ -171,17 +175,21 @@ class QuerySet(Generic[T]):
     def _build_sql(self) -> tuple[str, list[Any]]:
         """SELECT 文と bind パラメータのタプルを返す。"""
         table = self._model._meta.table_name
+        params: list[Any] = []
 
         # SELECT 句: JOIN があれば曖昧さ回避のためテーブル名を付ける
         if self._select_cols:
-            cols = ", ".join(self._select_cols)
+            col_sqls = []
+            for col_sql, col_params in self._select_cols:
+                col_sqls.append(col_sql)
+                params.extend(col_params)
+            cols = ", ".join(col_sqls)
         elif self._joins:
             cols = f"{table}.*"
         else:
             cols = "*"
 
         sql = f"SELECT {cols} FROM {table}"
-        params: list[Any] = []
 
         # JOIN 句
         for j in self._joins:
@@ -225,10 +233,10 @@ class QuerySet(Generic[T]):
 
     @property
     def _returns_raw(self) -> bool:
-        """JOIN / GROUP BY / 集計式がある場合は list[dict] を返す。"""
+        """JOIN / GROUP BY / 集計式 / CASE WHEN がある場合は list[dict] を返す。"""
         if self._joins or self._group_by:
             return True
-        if self._select_cols and any("(" in col for col in self._select_cols):
+        if self._select_cols and any("(" in col_sql for col_sql, _ in self._select_cols):
             return True
         return False
 
@@ -386,6 +394,10 @@ class QuerySet(Generic[T]):
             if isinstance(v, UpdateExpr):
                 set_parts.append(f"{k} = {v.sql}")
                 params.extend(v.params)
+            elif isinstance(v, Case):
+                case_sql, case_params = v._build()
+                set_parts.append(f"{k} = ({case_sql})")
+                params.extend(case_params)
             else:
                 set_parts.append(f"{k} = %s")
                 params.append(v)

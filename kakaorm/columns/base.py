@@ -283,6 +283,93 @@ class ColumnMeta:
         return f"<ColumnMeta {self._qualified()!r}>"
 
 
+# ── CASE WHEN 式 ──────────────────────────────────────────────
+
+class When:
+    """
+    CASE 式の分岐を表す。
+
+    例::
+
+        When(User.age >= 18, then="adult")
+        When(User.score >= 90, then="A")
+    """
+
+    def __init__(
+        self,
+        condition: "WhereClause | ColumnCompare",
+        *,
+        then: Any,
+    ) -> None:
+        if isinstance(condition, ColumnCompare):
+            self._condition = WhereClause(condition.sql)
+        else:
+            self._condition = condition
+        self._then = then
+
+
+class Case:
+    """
+    CASE WHEN ... THEN ... [ELSE ...] END 式。
+    ``select()`` の列指定や ``update()`` の SET 値に使える。
+
+    例::
+
+        from kakaorm import Case, When
+
+        # SELECT での使用
+        rows = await User.all().select(
+            User.id,
+            Case(
+                When(User.age >= 18, then="adult"),
+                When(User.age >= 13, then="teen"),
+                default="child",
+            ).label("category"),
+        )
+
+        # UPDATE での使用
+        await Product.all().update(
+            tier=Case(
+                When(Product.price >= 10000, then="premium"),
+                When(Product.price >= 3000,  then="standard"),
+                default="budget",
+            )
+        )
+    """
+
+    def __init__(self, *whens: When, default: Any = None, alias: str | None = None) -> None:
+        self._whens = whens
+        self._default = default
+        self._alias = alias
+
+    def label(self, alias: str) -> "Case":
+        """AS alias を付ける（SELECT で使用するとき）。"""
+        return Case(*self._whens, default=self._default, alias=alias)
+
+    def _build(self) -> tuple[str, list[Any]]:
+        """(sql_fragment, params) を返す。alias は含まない。"""
+        parts = ["CASE"]
+        params: list[Any] = []
+        for w in self._whens:
+            parts.append(f"WHEN {w._condition.sql} THEN %s")
+            params.extend(w._condition.params)
+            params.append(w._then)
+        if self._default is not None:
+            parts.append("ELSE %s")
+            params.append(self._default)
+        parts.append("END")
+        return " ".join(parts), params
+
+    def _sql_expr(self) -> str:
+        """SELECT リスト用 SQL 式（エイリアス付き）。params は _build() で取得。"""
+        sql, _ = self._build()
+        return f"({sql}) AS {self._alias}" if self._alias else f"({sql})"
+
+    def __repr__(self) -> str:
+        sql, params = self._build()
+        return f"<Case {sql!r} params={params}>"
+
+
 class Column(Generic[T]):
     """
     モデルフィールドの基底クラス。

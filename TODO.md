@@ -7,7 +7,7 @@
 #### 低優先
 
 - [x] サブクエリ (WHERE col IN/NOT IN (SELECT ...) 対応)
-- [ ] CASE WHEN 式 (UPDATE の SET 句での条件分岐)
+- [x] CASE WHEN 式 (SELECT 列・UPDATE SET 句での条件分岐)
 - [ ] SQL 文字列関数 (REPLACE / CONCAT / SUBSTR 等)
 - [ ] ウィンドウ関数
 - [ ] UNION / INTERSECT

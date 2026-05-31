@@ -858,11 +858,13 @@ from kakaorm.columns.types import (  # noqa: E402
 )
 from kakaorm.columns.base import (  # noqa: E402
     AggFunc,
+    Case,
     Count,
     Sum,
     Avg,
     Max,
     Min,
+    When,
 )
 from kakaorm.relationship import relationship  # noqa: E402
 from kakaorm.query import Subquery  # noqa: E402
@@ -898,4 +900,7 @@ __all__ = [
     "Avg",
     "Max",
     "Min",
+    # CASE WHEN
+    "Case",
+    "When",
 ]
