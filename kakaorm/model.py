@@ -203,6 +203,37 @@ class Model(metaclass=AsyncORMMeta):
         await instance.save()
         return instance
 
+    @classmethod
+    async def bulk_create(
+        cls: Type[T],
+        instances: list[T],
+        *,
+        batch_size: int = 500,
+    ) -> list[T]:
+        """
+        複数インスタンスを最小限の SQL で一括 INSERT する。
+
+        通常の ``create()`` が N 件で N 回の INSERT を発行するのに対し、
+        ``bulk_create()`` は ``batch_size`` 件ごとに 1 回の INSERT にまとめる。
+
+        例::
+
+            posts = [Post(title=f"記事{i}", views=0) for i in range(1000)]
+            await Post.bulk_create(posts)
+            # → INSERT INTO post (...) VALUES (...), (...), ... × 2 回
+
+        :param instances: 未保存の Model インスタンスのリスト。
+        :param batch_size: 1 回の INSERT に含める最大行数。
+        :returns: id が設定された同じインスタンスのリスト。
+        """
+        if not instances:
+            return []
+        if cls._engine is None:
+            raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
+        for i in range(0, len(instances), batch_size):
+            await cls._engine._bulk_insert(cls, instances[i : i + batch_size])
+        return instances
+
     # ── インスタンスメソッド ──────────────────────────────────
 
     async def save(self) -> None:

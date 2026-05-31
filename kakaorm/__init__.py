@@ -179,6 +179,15 @@ class Engine(ABC):
         sql = f"DELETE FROM {meta.table_name} WHERE id = {pk_placeholder}"
         await self._execute(sql, [pk])
 
+    async def _bulk_insert(self, model_cls: Any, instances: list) -> None:
+        """
+        複数インスタンスを一括 INSERT する。
+        デフォルト実装は1件ずつ INSERT するループ。
+        各サブクラスでオーバーライドして効率化する。
+        """
+        for instance in instances:
+            await self._insert(instance)
+
     async def create_table(self, model_cls: Any, *, if_not_exists: bool = True) -> None:
         """モデルクラスから CREATE TABLE 文を生成して実行する。"""
         meta = model_cls._meta
@@ -271,6 +280,40 @@ class AsyncpgEngine(Engine):
         async with self._pool.acquire() as conn:
             return await conn.fetchval(sql, *params)
 
+    async def _bulk_insert(self, model_cls: Any, instances: list) -> None:
+        """asyncpg 最適化: multi-row INSERT ... RETURNING id で全 ID を一括取得。"""
+        if not instances:
+            return
+        meta = model_cls._meta
+        cols = [name for name, col in meta.columns.items() if not col.primary_key]
+        if not cols:
+            return
+
+        n_cols = len(cols)
+        row_phs = []
+        for i in range(len(instances)):
+            offset = i * n_cols
+            row_phs.append(
+                "(" + ", ".join(f"${offset + j + 1}" for j in range(n_cols)) + ")"
+            )
+        sql = (
+            f"INSERT INTO {meta.table_name} ({', '.join(cols)})"
+            f" VALUES {', '.join(row_phs)} RETURNING id"
+        )
+        all_params = [
+            inst._data.get(col_name)
+            for inst in instances
+            for col_name in cols
+        ]
+        conn = _tx_conn.get()
+        if conn:
+            rows = await conn.fetch(sql, *all_params)
+        else:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(sql, *all_params)
+        for inst, row in zip(instances, rows):
+            inst._data["id"] = row["id"]
+
     @asynccontextmanager
     async def transaction(self):
         """asyncpg トランザクション。専用接続を ContextVar に保持する。"""
@@ -336,6 +379,46 @@ class AioSQLiteEngine(Engine):
                 return cursor.lastrowid
             row = await cursor.fetchone()
             return row[0] if row else None
+
+    async def _bulk_insert(self, model_cls: Any, instances: list) -> None:
+        """
+        SQLite 最適化: 1回の multi-row INSERT にまとめる。
+
+        SQLite のバインド変数上限 (999) を超えないよう、
+        カラム数に応じて自動的に分割する。
+        """
+        if not instances:
+            return
+        meta = model_cls._meta
+        cols = [name for name, col in meta.columns.items() if not col.primary_key]
+        if not cols:
+            return
+
+        # SQLite のバインド変数上限を超えないよう分割
+        sqlite_var_limit = 999
+        max_rows = max(1, sqlite_var_limit // len(cols))
+
+        for i in range(0, len(instances), max_rows):
+            batch = instances[i : i + max_rows]
+            all_params = [
+                inst._data.get(col_name)
+                for inst in batch
+                for col_name in cols
+            ]
+            row_ph = "(" + ", ".join("?" * len(cols)) + ")"
+            sql = (
+                f"INSERT INTO {meta.table_name} ({', '.join(cols)})"
+                f" VALUES {', '.join([row_ph] * len(batch))}"
+            )
+            async with self._conn.execute(sql, all_params) as cursor:
+                if not _in_tx.get():
+                    await self._conn.commit()
+                last_id = cursor.lastrowid
+
+            # SQLite の lastrowid は最後に挿入した行の ID
+            first_id = last_id - len(batch) + 1
+            for j, inst in enumerate(batch):
+                inst._data["id"] = first_id + j
 
     @asynccontextmanager
     async def transaction(self):
