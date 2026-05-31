@@ -187,32 +187,36 @@ class ColumnMeta:
             return f"{self._table}.{self._name}"
         return self._name
 
+    def _to_db(self, value: Any) -> Any:
+        """比較値を to_db() で変換する。"""
+        return self._column.to_db(value)
+
     # ── 比較演算子 ────────────────────────────────────────────
     def __eq__(self, other: Any) -> "WhereClause | ColumnCompare":   # type: ignore[override]
         if isinstance(other, ColumnMeta):
             return ColumnCompare(f"{self._qualified()} = {other._qualified()}")
         if other is None:
             return WhereClause(f"{self._qualified()} IS NULL")
-        return WhereClause(f"{self._qualified()} = %s", [other])
+        return WhereClause(f"{self._qualified()} = %s", [self._to_db(other)])
 
     def __ne__(self, other: Any) -> "WhereClause | ColumnCompare":   # type: ignore[override]
         if isinstance(other, ColumnMeta):
             return ColumnCompare(f"{self._qualified()} != {other._qualified()}")
         if other is None:
             return WhereClause(f"{self._qualified()} IS NOT NULL")
-        return WhereClause(f"{self._qualified()} != %s", [other])
+        return WhereClause(f"{self._qualified()} != %s", [self._to_db(other)])
 
     def __lt__(self, other: Any) -> WhereClause:
-        return WhereClause(f"{self._qualified()} < %s", [other])
+        return WhereClause(f"{self._qualified()} < %s", [self._to_db(other)])
 
     def __le__(self, other: Any) -> WhereClause:
-        return WhereClause(f"{self._qualified()} <= %s", [other])
+        return WhereClause(f"{self._qualified()} <= %s", [self._to_db(other)])
 
     def __gt__(self, other: Any) -> WhereClause:
-        return WhereClause(f"{self._qualified()} > %s", [other])
+        return WhereClause(f"{self._qualified()} > %s", [self._to_db(other)])
 
     def __ge__(self, other: Any) -> WhereClause:
-        return WhereClause(f"{self._qualified()} >= %s", [other])
+        return WhereClause(f"{self._qualified()} >= %s", [self._to_db(other)])
 
     # ── 追加クエリメソッド ────────────────────────────────────
     def like(self, pattern: str) -> WhereClause:
@@ -223,11 +227,11 @@ class ColumnMeta:
 
     def in_(self, values: Sequence[Any]) -> WhereClause:
         placeholders = ", ".join(["%s"] * len(values))
-        return WhereClause(f"{self._qualified()} IN ({placeholders})", list(values))
+        return WhereClause(f"{self._qualified()} IN ({placeholders})", [self._to_db(v) for v in values])
 
     def not_in(self, values: Sequence[Any]) -> WhereClause:
         placeholders = ", ".join(["%s"] * len(values))
-        return WhereClause(f"{self._qualified()} NOT IN ({placeholders})", list(values))
+        return WhereClause(f"{self._qualified()} NOT IN ({placeholders})", [self._to_db(v) for v in values])
 
     def is_null(self) -> WhereClause:
         return WhereClause(f"{self._qualified()} IS NULL")
@@ -236,7 +240,7 @@ class ColumnMeta:
         return WhereClause(f"{self._qualified()} IS NOT NULL")
 
     def between(self, low: Any, high: Any) -> WhereClause:
-        return WhereClause(f"{self._qualified()} BETWEEN %s AND %s", [low, high])
+        return WhereClause(f"{self._qualified()} BETWEEN %s AND %s", [self._to_db(low), self._to_db(high)])
 
     # ── 算術演算子（UPDATE 式生成用）────────────────────────────
     def __add__(self, other: Any) -> "UpdateExpr":

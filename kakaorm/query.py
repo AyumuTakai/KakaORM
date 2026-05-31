@@ -234,6 +234,15 @@ class QuerySet(Generic[T]):
 
     # ── 実行系 ────────────────────────────────────────────────
 
+    def _hydrate(self, row: dict) -> T:
+        """DB 行を from_db() 変換してモデルインスタンス化する。"""
+        columns = self._model._meta.columns
+        converted = {
+            k: columns[k].from_db(v) if k in columns else v
+            for k, v in row.items()
+        }
+        return self._model(**converted)
+
     async def execute(self) -> list[Any]:
         """
         クエリを実行する。
@@ -247,7 +256,7 @@ class QuerySet(Generic[T]):
         rows = await engine._fetch(sql, params)
         if self._returns_raw:
             return list(rows)
-        return [self._model(**dict(row)) for row in rows]
+        return [self._hydrate(row) for row in rows]
 
     async def count(self) -> int:
         """COUNT(*) を実行して件数を返す。"""

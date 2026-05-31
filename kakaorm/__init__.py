@@ -143,7 +143,7 @@ class Engine(ABC):
             name for name, col in meta.columns.items()
             if not col.primary_key and instance._data.get(name) is not None
         ]
-        values = [instance._data[c] for c in cols]
+        values = [meta.columns[c].to_db(instance._data[c]) for c in cols]
         placeholders = self._placeholders(len(cols))
         sql = (
             f"INSERT INTO {meta.table_name} ({', '.join(cols)}) "
@@ -160,7 +160,7 @@ class Engine(ABC):
             name for name, col in meta.columns.items()
             if not col.primary_key
         ]
-        values = [instance._data.get(c) for c in col_names]
+        values = [meta.columns[c].to_db(instance._data.get(c)) for c in col_names]
         set_clause = ", ".join(
             f"{name} = {self._param(i + 1)}" for i, name in enumerate(col_names)
         )
@@ -301,7 +301,7 @@ class AsyncpgEngine(Engine):
             f" VALUES {', '.join(row_phs)} RETURNING id"
         )
         all_params = [
-            inst._data.get(col_name)
+            meta.columns[col_name].to_db(inst._data.get(col_name))
             for inst in instances
             for col_name in cols
         ]
@@ -401,7 +401,7 @@ class AioSQLiteEngine(Engine):
         for i in range(0, len(instances), max_rows):
             batch = instances[i : i + max_rows]
             all_params = [
-                inst._data.get(col_name)
+                meta.columns[col_name].to_db(inst._data.get(col_name))
                 for inst in batch
                 for col_name in cols
             ]
@@ -446,6 +446,10 @@ class AioSQLiteEngine(Engine):
             ddl = ddl.replace("DOUBLE PRECISION", "REAL")
             ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "TEXT")
             ddl = ddl.replace("BOOLEAN", "INTEGER")
+            # DATE / TIME は SQLite では TEXT として保存
+            import re as _re
+            ddl = _re.sub(r"^DATE\b", "TEXT", ddl)
+            ddl = _re.sub(r"^TIME\b", "TEXT", ddl)
             col_defs.append(f"  {col_name} {ddl}")
         # REFERENCES 句を除去 (SQLite は FK 制約が複雑)
         col_defs_clean = [re.sub(r"\s+REFERENCES\s+\w+\(\w+\).*", "", d) for d in col_defs]
@@ -733,6 +737,9 @@ from kakaorm.columns.types import (  # noqa: E402
     BoolColumn,
     DateTimeColumn,
     ForeignKey,
+    DecimalColumn,
+    DateColumn,
+    TimeColumn,
 )
 from kakaorm.columns.base import (  # noqa: E402
     AggFunc,
@@ -760,6 +767,9 @@ __all__ = [
     "BoolColumn",
     "DateTimeColumn",
     "ForeignKey",
+    "DecimalColumn",
+    "DateColumn",
+    "TimeColumn",
     # Aggregate functions
     "AggFunc",
     "Count",

@@ -6,7 +6,9 @@
 """
 
 from __future__ import annotations
-from datetime import datetime
+import datetime
+from datetime import datetime as _datetime
+from decimal import Decimal
 from typing import Any
 
 from kakaorm.columns.base import Column
@@ -47,7 +49,7 @@ class BoolColumn(Column[bool]):
     sql_type = "BOOLEAN"
 
 
-class DateTimeColumn(Column[datetime]):
+class DateTimeColumn(Column[_datetime]):
     sql_type = "TIMESTAMP WITH TIME ZONE"
 
     def __init__(self, *, auto_now: bool = False, auto_now_add: bool = False, **kwargs: Any) -> None:
@@ -58,13 +60,13 @@ class DateTimeColumn(Column[datetime]):
     def get_insert_value(self, value: Any) -> Any:
         """INSERT 時に auto_now_add なら現在時刻を差し込む。"""
         if self.auto_now_add and value is None:
-            return datetime.utcnow()
+            return _datetime.utcnow()
         return value
 
     def get_update_value(self, value: Any) -> Any:
         """UPDATE 時に auto_now なら現在時刻を差し込む。"""
         if self.auto_now:
-            return datetime.utcnow()
+            return _datetime.utcnow()
         return value
 
 
@@ -93,3 +95,73 @@ class ForeignKey(Column[int]):
         return getattr(self._related_model, "_meta", None) and \
                self._related_model._meta.table_name or \
                self._related_model.__name__.lower()
+
+
+class DecimalColumn(Column[Decimal]):
+    """NUMERIC(max_digits, decimal_places) 型。浮動小数点誤差なし。"""
+    sql_type = "NUMERIC"
+
+    def __init__(self, max_digits: int, decimal_places: int, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.max_digits = max_digits
+        self.decimal_places = decimal_places
+
+    def from_db(self, value: Any) -> Decimal | None:
+        if value is None:
+            return None
+        return Decimal(str(value))
+
+    def to_db(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        return str(Decimal(str(value)))
+
+    def ddl_fragment(self) -> str:
+        parts = [f"NUMERIC({self.max_digits},{self.decimal_places})"]
+        if self.primary_key:
+            parts.append("PRIMARY KEY")
+        if not self.nullable and not self.primary_key:
+            parts.append("NOT NULL")
+        if self.unique:
+            parts.append("UNIQUE")
+        return " ".join(parts)
+
+
+class DateColumn(Column[datetime.date]):
+    """DATE 型。時刻なし。"""
+    sql_type = "DATE"
+
+    def from_db(self, value: Any) -> datetime.date | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime.date) and not isinstance(value, _datetime):
+            return value
+        if isinstance(value, _datetime):
+            return value.date()
+        return _datetime.fromisoformat(str(value)).date()
+
+    def to_db(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime.date):
+            return value.isoformat()
+        return str(value)
+
+
+class TimeColumn(Column[datetime.time]):
+    """TIME 型。日付なし。"""
+    sql_type = "TIME"
+
+    def from_db(self, value: Any) -> datetime.time | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime.time):
+            return value
+        return _datetime.fromisoformat(f"2000-01-01T{value}").time()
+
+    def to_db(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime.time):
+            return value.isoformat()
+        return str(value)
