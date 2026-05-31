@@ -1,29 +1,27 @@
 # KakaORM
 
-[English](README.en.md)
-
 [![CI](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml/badge.svg)](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/kakaorm.svg)](https://pypi.org/project/kakaorm/)
 [![Python](https://img.shields.io/pypi/pyversions/kakaorm.svg)](https://pypi.org/project/kakaorm/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `psycopg3`)、SQLite (`aiosqlite`)、MySQL/MariaDB (`aiomysql`) をバックエンドとして使用でき、Django ORM ライクなモデル定義と型安全なクエリ構築を提供します。
+An async-native ORM for Python. Supports PostgreSQL (`asyncpg` / `psycopg3`), SQLite (`aiosqlite`), and MySQL/MariaDB (`aiomysql`) as backends, providing Django ORM-like model definitions and type-safe query building.
 
-## 特徴
+## Features
 
-- **完全非同期** — `async/await` ベースの API。`asyncio` と自然に統合
-- **型安全なクエリ** — `User.age >= 20` のような演算子オーバーロードで文字列なしにクエリを構築
-- **複数 DB 対応** — PostgreSQL (asyncpg / psycopg3)・SQLite (aiosqlite)・MySQL/MariaDB (aiomysql) をサポート
-- **自動マイグレーション** — モデルと DB スキーマの差分を検出して ALTER TABLE を生成
-- **Generic デスクリプタ** — `Column[T]` による型アノテーション推論。IDE の補完が正しく動作
-- **イベントフック** — `before_insert` / `after_update` などを Model に定義するだけで動作
-- **リレーション定義** — `has_many()` / `has_one()` / `belongs_to()` で FK ナビゲーション（前向き・逆参照）を宣言的に記述
-- **Pydantic v2 統合** — `__get_pydantic_core_schema__` / `__get_pydantic_json_schema__` を実装。FastAPI の `response_model` に KakaORM モデルを直接指定できる
+- **Fully async** — `async/await`-based API that integrates naturally with `asyncio`
+- **Type-safe queries** — Build queries without strings using operator overloading: `User.age >= 20`
+- **Multi-database** — Supports PostgreSQL (asyncpg / psycopg3), SQLite (aiosqlite), and MySQL/MariaDB (aiomysql)
+- **Auto migrations** — Detects diff between models and DB schema and generates `ALTER TABLE`
+- **Generic descriptors** — Type annotation inference via `Column[T]` for correct IDE completion
+- **Event hooks** — Define `before_insert` / `after_update` etc. directly on your Model
+- **Relation definitions** — Declare FK navigation (forward and reverse) with `has_many()` / `has_one()` / `belongs_to()`
+- **Pydantic v2 integration** — Implements `__get_pydantic_core_schema__` / `__get_pydantic_json_schema__`; use KakaORM models directly as FastAPI `response_model`
 
-## インストール
+## Installation
 
 ```bash
-# SQLite (開発・テスト向け)
+# SQLite (development / testing)
 pip install kakaorm[aiosqlite]
 
 # PostgreSQL (asyncpg)
@@ -35,11 +33,11 @@ pip install kakaorm[psycopg3]
 # MySQL / MariaDB
 pip install kakaorm[aiomysql]
 
-# 全ドライバ
+# All drivers
 pip install kakaorm[all]
 ```
 
-## クイックスタート
+## Quickstart
 
 ```python
 import asyncio
@@ -57,8 +55,8 @@ async def main():
     engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
     await engine.create_table(Task)
 
-    task = await Task.create(title="KakaORM を試す")
-    print(task.id, task.title, task.done)  # 1 KakaORM を試す False
+    task = await Task.create(title="Try KakaORM")
+    print(task.id, task.title, task.done)  # 1 Try KakaORM False
 
     task.done = True
     await task.save()
@@ -71,7 +69,7 @@ async def main():
 asyncio.run(main())
 ```
 
-## モデル定義
+## Model Definition
 
 ```python
 from kakaorm import Model, IntColumn, StrColumn, FloatColumn, BoolColumn, DateTimeColumn, ForeignKey
@@ -95,29 +93,29 @@ class Post(Model):
         table_name = "post"
 ```
 
-`id` カラムは主キーとして自動追加されます。
+An `id` column is added automatically as the primary key.
 
-### ユーザー定義主キー
+### Custom Primary Keys
 
-`primary_key=True` を任意のカラムに付けると、そのカラムが主キーになります。自動採番は行われません。
+Set `primary_key=True` on any column to make it the primary key. No auto-increment is applied.
 
 ```python
 class Country(Model):
-    code = StrColumn(primary_key=True, nullable=False)  # "JP" / "US" など
+    code = StrColumn(primary_key=True, nullable=False)  # e.g. "JP" / "US"
     name = StrColumn(nullable=False)
 
     class Meta:
         table_name = "country"
 
-# 主キーを明示して INSERT
+# Explicit primary key on INSERT
 jp = await Country.create(code="JP", name="Japan")
 jp.name = "Japan (updated)"
-await jp.save()  # WHERE code = 'JP' で UPDATE
+await jp.save()  # UPDATE WHERE code = 'JP'
 ```
 
-### 複合インデックス
+### Composite Indexes
 
-`Meta.indexes` にタプルのリストでインデックスを宣言します。`create_table()` 実行時に `CREATE INDEX` が自動発行されます。
+Declare indexes in `Meta.indexes` as a list of tuples. `CREATE INDEX` is issued automatically when `create_table()` runs.
 
 ```python
 class Product(Model):
@@ -128,14 +126,14 @@ class Product(Model):
     class Meta:
         table_name = "product"
         indexes = [
-            ("category", "price"),  # 複合インデックス
-            ("name",),              # 単一カラムインデックス
+            ("category", "price"),  # composite index
+            ("name",),              # single-column index
         ]
 ```
 
-## カラム型
+## Column Types
 
-| クラス            | Python 型        | SQL 型                     |
+| Class             | Python type      | SQL type                   |
 | ----------------- | ---------------- | -------------------------- |
 | `IntColumn`       | `int`            | `INTEGER`                  |
 | `StrColumn`       | `str`            | `TEXT` / `VARCHAR(n)`      |
@@ -147,84 +145,84 @@ class Product(Model):
 | `DecimalColumn`   | `Decimal`        | `NUMERIC(p, s)`            |
 | `ForeignKey`      | `int`            | `INTEGER REFERENCES ...`   |
 
-### 共通オプション
+### Common Options
 
 ```python
 StrColumn(
-    nullable=True,       # NULL 許可 (デフォルト: True)
-    default=None,        # デフォルト値
-    unique=False,        # UNIQUE 制約
-    primary_key=False,   # 主キー
-    index=False,         # 単一カラムインデックス
-    check="value > 0",   # CHECK 制約
+    nullable=True,       # allow NULL (default: True)
+    default=None,        # default value
+    unique=False,        # UNIQUE constraint
+    primary_key=False,   # primary key
+    index=False,         # single-column index
+    check="value > 0",   # CHECK constraint
 )
 StrColumn(max_length=255)          # → VARCHAR(255)
 IntColumn(auto_increment=True)     # → SERIAL PRIMARY KEY (PG) / AUTOINCREMENT (SQLite)
-DateTimeColumn(auto_now_add=True)  # INSERT 時に現在時刻を自動設定
-DateTimeColumn(auto_now=True)      # UPDATE 時に現在時刻を自動更新
+DateTimeColumn(auto_now_add=True)  # set current time automatically on INSERT
+DateTimeColumn(auto_now=True)      # update current time automatically on UPDATE
 ForeignKey(Author, on_delete="CASCADE")
 DecimalColumn(max_digits=10, decimal_places=2)  # NUMERIC(10, 2)
 ```
 
 ## CRUD
 
-### 作成
+### Create
 
 ```python
 author = await Author.create(name="Alice", email="alice@example.com")
-print(author.id)  # DB 生成の ID が設定される
+print(author.id)  # DB-generated ID is set
 ```
 
-### 取得
+### Read
 
 ```python
-# 全件
+# All records
 authors = await Author.all()
 
-# 1件 (見つからなければ NotFound 例外)
+# Single record (raises NotFound if not found)
 author = await Author.get(Author.email == "alice@example.com")
 
-# 1件 (見つからなければ None)
+# Single record (returns None if not found)
 author = await Author.get_or_none(Author.id == 1)
 
-# 先頭 / 末尾
+# First / last
 first = await Author.first()
 last  = await Author.last()
 ```
 
-### 更新
+### Update
 
 ```python
 author.name = "Alicia"
 await author.save()
 ```
 
-### 削除
+### Delete
 
 ```python
 await author.delete()
 ```
 
-### 一括操作
+### Bulk Operations
 
 ```python
-# 一括 INSERT (N 件を最小回数の SQL でまとめる)
-posts = [Post(title=f"記事{i}", views=0) for i in range(1000)]
+# Bulk INSERT (batched into minimal SQL statements)
+posts = [Post(title=f"Post {i}", views=0) for i in range(1000)]
 await Post.bulk_create(posts)
 
-# 一括 UPDATE
+# Bulk UPDATE
 await Post.where(Post.published == False).update(published=True)
 
-# 一括 DELETE
+# Bulk DELETE
 await Post.where(Post.views == 0).delete()
 
-# TRUNCATE (シーケンスもリセット)
+# TRUNCATE (also resets sequences)
 await Post.truncate()
 ```
 
-## イベントフック
+## Event Hooks
 
-`save()` / `delete()` の前後に任意の処理を差し込めます。Model を継承したクラスでメソッドをオーバーライドするだけです。
+Insert custom logic before/after `save()` / `delete()` by overriding methods on your Model subclass.
 
 ```python
 import datetime
@@ -236,42 +234,42 @@ class Article(Model):
     updated_at = DateTimeColumn(nullable=True)
 
     async def before_insert(self) -> None:
-        # INSERT 直前: タイムスタンプを自動設定
+        # Called just before INSERT: set timestamp automatically
         self.updated_at = datetime.datetime.utcnow()
 
     async def before_update(self) -> None:
-        # UPDATE 直前: バージョンをインクリメント
+        # Called just before UPDATE: increment version
         self.version = (self.version or 0) + 1
         self.updated_at = datetime.datetime.utcnow()
 
     async def after_delete(self) -> None:
-        # DELETE 完了後: ログ出力など
+        # Called after DELETE completes: e.g. log output
         print(f"Article deleted: {self.title}")
 ```
 
-利用可能なフック:
+Available hooks:
 
-| フック            | タイミング           |
-| ----------------- | -------------------- |
-| `before_insert`   | `save()` (INSERT 前) |
-| `after_insert`    | `save()` (INSERT 後) |
-| `before_update`   | `save()` (UPDATE 前) |
-| `after_update`    | `save()` (UPDATE 後) |
-| `before_delete`   | `delete()` 前        |
-| `after_delete`    | `delete()` 後        |
+| Hook              | When                         |
+| ----------------- | ---------------------------- |
+| `before_insert`   | Before `save()` (INSERT)     |
+| `after_insert`    | After `save()` (INSERT)      |
+| `before_update`   | Before `save()` (UPDATE)     |
+| `after_update`    | After `save()` (UPDATE)      |
+| `before_delete`   | Before `delete()`            |
+| `after_delete`    | After `delete()`             |
 
-> `QuerySet.update()` / `QuerySet.delete()` はフックを経由しません。
+> `QuerySet.update()` / `QuerySet.delete()` do **not** invoke hooks.
 
-## リレーション定義
+## Relation Definitions
 
-`has_many()` / `has_one()` / `belongs_to()` で FK を通じた関連オブジェクトの取得を宣言的に記述できます。`await` するまでクエリは発行されません。
+Use `has_many()` / `has_one()` / `belongs_to()` to declaratively describe FK-based related-object access. No query is issued until you `await`.
 
 ```python
 from kakaorm import Model, StrColumn, ForeignKey, has_many, belongs_to
 
 class Author(Model):
     name  = StrColumn(nullable=False)
-    # 1対多の逆参照
+    # Reverse 1-to-many
     posts = has_many("Post", foreign_key="author_id")
 
     class Meta:
@@ -280,13 +278,13 @@ class Author(Model):
 class Post(Model):
     title     = StrColumn(nullable=False)
     author_id = ForeignKey(Author, nullable=True)
-    # 多対1の前向き FK
+    # Forward many-to-1 FK
     author = belongs_to(Author, foreign_key="author_id")
 
     class Meta:
         table_name = "post"
 
-# 使用例
+# Usage
 post   = await Post.get(Post.id == 1)
 author = await post.author          # → Author | None
 
@@ -294,29 +292,29 @@ author = await Author.get(Author.id == 1)
 posts  = await author.posts         # → list[Post]
 ```
 
-### リレーションの種類
+### Relation Types
 
-| メソッド | 用途 | 戻り値 |
-|----------|------|--------|
-| `has_many()` | 1対多の逆参照 | `list[Model]` |
-| `has_one()` | 1対1の逆参照 | `Model \| None` |
-| `belongs_to()` | 多対1の前向き FK | `Model \| None` |
+| Method        | Use case              | Return type       |
+|---------------|-----------------------|-------------------|
+| `has_many()`  | 1-to-many reverse     | `list[Model]`     |
+| `has_one()`   | 1-to-1 reverse        | `Model \| None`   |
+| `belongs_to()`| Many-to-1 forward FK  | `Model \| None`   |
 
-`related_model` には文字列でクラス名を渡すことも可能です（循環 import 回避）。
+You can pass the class name as a string to `related_model` to avoid circular imports:
 
 ```python
 posts = has_many("Post", foreign_key="author_id")
 ```
 
-## QuerySet — クエリビルダ
+## QuerySet — Query Builder
 
-`where()` などのメソッドは `QuerySet` を返します。`await` するまで SQL は実行されません。
+Methods such as `where()` return a `QuerySet`. SQL is not executed until you `await`.
 
 ```python
-# 絞り込み (AND)
+# Filter (AND)
 posts = await Post.where(Post.published == True).where(Post.views >= 100)
 
-# 複合条件
+# Compound conditions
 posts = await Post.where(
     (Post.published == True) & (Post.views >= 100)
 )
@@ -325,7 +323,7 @@ posts = await Post.where(
 clause = (Post.views < 10) | (Post.published == False)
 posts  = await Post.where(~clause)
 
-# ソート・ページネーション
+# Sorting and pagination
 posts = await (
     Post.where(Post.published == True)
         .order_by(Post.views.desc)
@@ -333,19 +331,19 @@ posts = await (
         .offset(20)
 )
 
-# 特定カラムのみ SELECT
+# SELECT specific columns
 rows = await Post.all().select(Post.title, Post.views)
 
 # COUNT / EXISTS
 n      = await Post.where(Post.published == True).count()
 exists = await Post.where(Post.title.like("%Python%")).exists()
 
-# 非同期イテレーション
+# Async iteration
 async for post in Post.all().order_by(Post.views.desc):
     print(post.title)
 ```
 
-### WHERE 演算子一覧
+### WHERE Operators
 
 ```python
 Post.views == 100          # =
@@ -363,7 +361,7 @@ Post.views.not_in([1, 2])  # NOT IN
 Post.score.between(1, 5)   # BETWEEN
 ```
 
-### JOIN / GROUP BY / 集計
+### JOIN / GROUP BY / Aggregation
 
 ```python
 from kakaorm import Count, Sum, Avg
@@ -383,7 +381,7 @@ rows = await (
         .group_by(Author.id, Author.name)
 )
 
-# 集計
+# Aggregation
 total = await Post.all().sum(Post.views)
 stats = await Post.all().aggregate(
     total=Sum(Post.views),
@@ -399,13 +397,13 @@ rows = await (
 )
 ```
 
-### UPDATE 式 (列参照)
+### UPDATE Expressions (column references)
 
 ```python
-# 固定値
+# Fixed value
 await Post.all().update(published=True)
 
-# 列参照を含む式
+# Expression with column reference
 await Post.all().update(views=Post.views + 1)
 await Product.all().update(price=Product.price * 0.97)
 ```
@@ -421,7 +419,7 @@ await (
 
 ## Raw SQL
 
-ORM で表現が難しいクエリには Raw SQL を使用できます。
+Use raw SQL for queries that are hard to express with the ORM.
 
 ```python
 # SELECT → list[dict]
@@ -430,48 +428,48 @@ rows = await engine.fetch(
     [100],
 )
 
-# INSERT / UPDATE / DELETE → 影響行数
+# INSERT / UPDATE / DELETE → affected row count
 affected = await engine.execute(
     "UPDATE post SET views = 0 WHERE author_id = %s",
     [author_id],
 )
 
-# スカラー値
+# Scalar value
 count = await engine.fetchval("SELECT COUNT(*) FROM post WHERE published = %s", [True])
 ```
 
-## トランザクション
+## Transactions
 
 ```python
 async with engine.transaction():
     order = await Order.create(item="Widget", qty=1)
     await Stock.where(Stock.item == "Widget").update(qty=Stock.qty - 1)
-    # 例外発生時は自動ロールバック
+    # Automatically rolled back on exception
 ```
 
-## マイグレーション
+## Migrations
 
 ```python
 from kakaorm.migration import Migrator
 
 migrator = Migrator(engine)
 
-# 差分プランを確認
+# Preview the migration plan
 plan = await migrator.plan([Author, Post])
 print(plan.sql)
 
-# 適用
+# Apply
 await plan.apply()
 
-# カラム削除も含めた破壊的なプラン
+# Destructive plan including column drops
 plan = await migrator.plan_with_drop([Author, Post])
 await plan.apply()
 ```
 
-## DB 接続
+## Database Connections
 
 ```python
-# SQLite (開発・テスト)
+# SQLite (development / testing)
 engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
 engine = await kakaorm.connect("sqlite+aiosqlite:///./dev.db")
 
@@ -484,15 +482,14 @@ engine = await kakaorm.connect("postgresql+psycopg3://user:password@localhost/db
 # MySQL / MariaDB (aiomysql)
 engine = await kakaorm.connect("mysql+aiomysql://user:password@localhost:3306/dbname")
 
-# コンテキストマネージャとしても使用可能
+# Also usable as a context manager
 async with await kakaorm.connect("sqlite+aiosqlite:///:memory:") as engine:
     ...
 ```
 
-## FastAPI との連携
+## FastAPI Integration
 
-Pydantic v2 プロトコルを実装しているため、KakaORM モデルを `response_model` に直接指定できます。
-レスポンス用の `BaseModel` サブクラスを別途定義する必要はありません。
+KakaORM implements the Pydantic v2 protocol, so you can use KakaORM models directly as `response_model` without defining a separate `BaseModel` subclass for responses.
 
 ```python
 from contextlib import asynccontextmanager
@@ -500,7 +497,7 @@ import kakaorm
 from kakaorm import Model, StrColumn, BoolColumn
 from kakaorm.migration import Migrator
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel  # リクエストボディ用のみ
+from pydantic import BaseModel  # only for request bodies
 
 class Todo(Model):
     title       = StrColumn(nullable=False)
@@ -510,7 +507,7 @@ class Todo(Model):
     class Meta:
         table_name = "todo"
 
-# リクエストボディ用スキーマ（入力バリデーション）
+# Request body schema (input validation)
 class TodoCreate(BaseModel):
     title: str
     description: str | None = None
@@ -526,7 +523,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# response_model に KakaORM モデルを直接指定
+# Use KakaORM model directly as response_model
 @app.get("/todos", response_model=list[Todo])
 async def list_todos():
     return await Todo.all()
@@ -543,44 +540,44 @@ async def get_todo(todo_id: int):
     return todo
 ```
 
-Swagger UI (`/docs`) には `id` / `title` / `description` / `completed` の型情報が自動出力されます。
+Swagger UI (`/docs`) automatically outputs type information for `id` / `title` / `description` / `completed`.
 
-起動:
+Start:
 
 ```bash
 pip install fastapi uvicorn aiosqlite
 python examples/fastapi_todo.py
-# http://localhost:8000/docs で Swagger UI を確認
+# View Swagger UI at http://localhost:8000/docs
 ```
 
-### Pydantic 互換メソッド
+### Pydantic-compatible Methods
 
 ```python
-# Pydantic 互換のシリアライズ
+# Pydantic-compatible serialization
 user.model_dump()
 # → {"id": 1, "name": "Alice", "age": 30, "bio": None}
 
 user.model_dump(exclude_none=True, exclude={"bio"})
 # → {"id": 1, "name": "Alice", "age": 30}
 
-# Pydantic 互換の変換
-user = User.model_validate({"name": "Alice", "age": 30})   # dict から
-user = User.model_validate(other_instance)                  # 別インスタンスから
+# Pydantic-compatible conversion
+user = User.model_validate({"name": "Alice", "age": 30})   # from dict
+user = User.model_validate(other_instance)                  # from another instance
 ```
 
-## セキュリティ
+## Security
 
-kakaorm はクエリの値を常にバインドパラメータとして扱い、SQL インジェクションを防止します。
+KakaORM always treats query values as bind parameters to prevent SQL injection.
 
-- **WHERE / LIKE / IN 句の値** — すべてバインドパラメータ経由で送出されます
-- **`update()` のカラム名** — `_meta.columns` に存在しないキーは `ValueError` で拒否します
-- **`insert_into()` の宛先カラム名** — 同様に `_meta.columns` でホワイトリスト検証します
-- **`create()` のフィールド名** — 未知のフィールドは `TypeError` で拒否します
+- **Values in WHERE / LIKE / IN clauses** — always sent via bind parameters
+- **Column names in `update()`** — keys not present in `_meta.columns` are rejected with `ValueError`
+- **Destination column names in `insert_into()`** — similarly whitelist-validated against `_meta.columns`
+- **Field names in `create()`** — unknown fields are rejected with `TypeError`
 
-> **アプリ側の注意点**
+> **Application-level notes**
 >
-> `order_by()` は生文字列をそのまま SQL に展開します。
-> ユーザー入力を ORDER BY に使う場合は、許可済みカラム名のみを受け付けるホワイトリストをアプリ側で実装してください。
+> `order_by()` expands raw strings directly into SQL.
+> If ORDER BY accepts user input, implement a whitelist of allowed column names in your application layer:
 >
 > ```python
 > ALLOWED = {"views", "title", "created_at"}
@@ -588,32 +585,32 @@ kakaorm はクエリの値を常にバインドパラメータとして扱い、
 > results = await Post.all().order_by(f"{col} DESC")
 > ```
 >
-> また、`create()` / `save()` は既知フィールドへの書き込みを制限しません。
-> ユーザー入力から特権フィールド（`is_admin` など）を除外する処理はアプリ層で行ってください。
+> Also note that `create()` / `save()` do not restrict writes to privileged fields.
+> Exclude privileged fields such as `is_admin` from user input at the application layer.
 
-## プロジェクト構成
+## Project Structure
 
 ```
 kakaorm/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml           # GitHub Actions CI (lint + test matrix + MySQL + build)
-├── kakaorm/                 # パッケージ本体
-│   ├── __init__.py          # 公開 API の再エクスポート
-│   ├── py.typed             # PEP 561 型情報マーカー
-│   ├── engine.py            # Engine 基底クラス + AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine, connect()
-│   ├── model.py             # Model 基底クラス, AsyncORMMeta メタクラス
-│   ├── query.py             # QuerySet (遅延クエリビルダ)
-│   ├── relationship.py      # has_many / has_one / belongs_to デスクリプタ
+├── kakaorm/                 # Package source
+│   ├── __init__.py          # Public API re-exports
+│   ├── py.typed             # PEP 561 type marker
+│   ├── engine.py            # Engine base class + AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine, connect()
+│   ├── model.py             # Model base class, AsyncORMMeta metaclass
+│   ├── query.py             # QuerySet (lazy query builder)
+│   ├── relationship.py      # has_many / has_one / belongs_to descriptors
 │   ├── columns/
-│   │   ├── base.py          # Column[T] 基底クラス, ColumnMeta, WhereClause
+│   │   ├── base.py          # Column[T] base class, ColumnMeta, WhereClause
 │   │   └── types.py         # IntColumn, StrColumn, FloatColumn, BoolColumn,
 │   │                        # DateTimeColumn, DateColumn, TimeColumn, DecimalColumn, ForeignKey
 │   └── migration/
 │       └── __init__.py      # Migrator, VersionedMigrator, MigrationPlan
 ├── examples/
-│   ├── blog_example.py      # ブログシステムの使用例
-│   └── fastapi_todo.py      # FastAPI TODO リスト API
+│   ├── blog_example.py      # Blog system usage example
+│   └── fastapi_todo.py      # FastAPI TODO list API
 ├── tests/
 │   ├── conftest.py
 │   ├── test_crud.py
@@ -623,36 +620,36 @@ kakaorm/
 │   ├── test_bulk_create.py
 │   ├── test_raw_sql.py
 │   ├── test_migration.py
-│   ├── test_indexes.py      # 複合インデックス
-│   ├── test_custom_pk.py    # ユーザー定義主キー
-│   ├── test_hooks.py        # イベントフック
-│   ├── test_relationship.py # リレーション定義
-│   └── test_security.py     # セキュリティ回帰テスト
-├── CHANGELOG.md             # バージョン履歴
+│   ├── test_indexes.py      # Composite indexes
+│   ├── test_custom_pk.py    # Custom primary keys
+│   ├── test_hooks.py        # Event hooks
+│   ├── test_relationship.py # Relation definitions
+│   └── test_security.py     # Security regression tests
+├── CHANGELOG.md             # Version history
 ├── LICENSE                  # MIT License
-├── pyproject.toml           # パッケージメタデータ・ビルド設定
-└── ruff.toml                # Ruff 設定
+├── pyproject.toml           # Package metadata and build configuration
+└── ruff.toml                # Ruff configuration
 ```
 
-## テスト実行
+## Running Tests
 
 ```bash
 pip install -e ".[aiosqlite,dev]"
 pytest
 
-# MySQL テスト (別途 MySQL サーバーが必要)
-# MySQL 8.0 は caching_sha2_password 認証を使うため cryptography が必要
+# MySQL tests (requires a running MySQL server)
+# MySQL 8.0 uses caching_sha2_password auth, which requires the cryptography package
 pip install -e ".[aiomysql,dev]" cryptography
 export KAKAORM_MYSQL_URL="mysql+aiomysql://root:password@localhost:3306/test_db"
 pytest tests/test_mysql.py
 ```
 
-## 動作要件
+## Requirements
 
-- Python 3.11 以上
-- 接続するデータベースに応じたドライバ (`aiosqlite` / `asyncpg` / `psycopg[binary]` / `aiomysql`)
-- Pydantic v2 統合を使う場合: `pip install pydantic`（省略可能 — 未インストールでも ORM 本体は動作する）
+- Python 3.11+
+- The appropriate driver for your database (`aiosqlite` / `asyncpg` / `psycopg[binary]` / `aiomysql`)
+- For Pydantic v2 integration: `pip install pydantic` (optional — the ORM core works without it)
 
-## ライセンス
+## License
 
 [MIT License](LICENSE)
