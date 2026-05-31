@@ -20,8 +20,9 @@ Migration — スキーマ差分検出と SQL 生成
 
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass, field
-from typing import Any, Type
+from typing import Any, Callable, Type
 
 
 @dataclass
@@ -202,3 +203,106 @@ class Migrator:
             table, col = m.group(1), m.group(2)
             return f"ALTER TABLE {table} DROP COLUMN {col}"
         return warning_comment
+
+
+@dataclass
+class MigrationRecord:
+    """適用済みマイグレーション 1 件分の情報。"""
+    name: str
+    applied_at: str
+
+
+class VersionedMigrator(Migrator):
+    """
+    マイグレーション履歴を DB テーブルで管理する Migrator 拡張。
+
+    ``kakaorm_migrations`` テーブルに適用済みマイグレーション名を記録し、
+    未適用のものだけを実行する。
+
+    使い方::
+
+        from kakaorm.migration import VersionedMigrator
+
+        migrator = VersionedMigrator(engine)
+
+        # 適用したいマイグレーションを順序付き辞書で定義する
+        migrations = {
+            "001_create_users": lambda: engine.create_table(User),
+            "002_add_email_index": lambda: engine.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_email ON user (email)"
+            ),
+            "003_create_posts": lambda: engine.create_table(Post),
+        }
+
+        applied_count = await migrator.run(migrations)
+        print(f"{applied_count} migration(s) applied.")
+
+        # 履歴を確認
+        history = await migrator.history()
+        for record in history:
+            print(record.name, record.applied_at)
+    """
+
+    HISTORY_TABLE = "kakaorm_migrations"
+
+    async def ensure_history_table(self) -> None:
+        """履歴テーブルが存在しなければ作成する。DB 種別に依存しない汎用 DDL を使用。"""
+        sql = (
+            f"CREATE TABLE IF NOT EXISTS {self.HISTORY_TABLE} ("
+            f"  name TEXT PRIMARY KEY,"
+            f"  applied_at TEXT NOT NULL"
+            f")"
+        )
+        await self.engine._execute(sql, [])
+
+    async def applied_names(self) -> set[str]:
+        """適用済みマイグレーション名のセット。"""
+        rows = await self.engine._fetch(
+            f"SELECT name FROM {self.HISTORY_TABLE}", []
+        )
+        return {r["name"] for r in rows}
+
+    async def record(self, name: str) -> None:
+        """マイグレーション名を履歴テーブルに記録する。"""
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        await self.engine._execute(
+            f"INSERT INTO {self.HISTORY_TABLE} (name, applied_at) VALUES (%s, %s)",
+            [name, now],
+        )
+
+    async def history(self) -> list[MigrationRecord]:
+        """適用済みマイグレーションを適用順に返す。"""
+        rows = await self.engine._fetch(
+            f"SELECT name, applied_at FROM {self.HISTORY_TABLE} ORDER BY applied_at ASC",
+            [],
+        )
+        return [MigrationRecord(name=r["name"], applied_at=r["applied_at"]) for r in rows]
+
+    async def run(
+        self,
+        migrations: dict[str, Callable],
+        *,
+        verbose: bool = False,
+    ) -> int:
+        """
+        未適用のマイグレーションのみ実行し、履歴に記録する。
+
+        :param migrations: ``{name: async_callable}`` の順序付き辞書。
+                           callable は引数なしの非同期関数。
+        :param verbose:    True のとき実行中のマイグレーション名を標準出力へ出力。
+        :returns:          実行したマイグレーション数。
+        """
+        await self.ensure_history_table()
+        applied = await self.applied_names()
+
+        count = 0
+        for name, migrate_fn in migrations.items():
+            if name in applied:
+                continue
+            if verbose:
+                print(f"  Applying: {name}")
+            await migrate_fn()
+            await self.record(name)
+            count += 1
+
+        return count

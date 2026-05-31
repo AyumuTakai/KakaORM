@@ -49,7 +49,7 @@
 
 ## マイグレーション
 
-- [ ] バージョン管理・履歴
+- [x] バージョン管理・履歴 (VersionedMigrator / kakaorm_migrations テーブル)
 - [ ] ダウングレード
 - [ ] カラム型変更
 - [ ] 自動生成 (autogenerate)
