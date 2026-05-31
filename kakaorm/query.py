@@ -14,11 +14,11 @@ await するまで SQL は実行されない。
 from __future__ import annotations
 
 import copy
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, Generic, Type, TypeVar
+from typing import TYPE_CHECKING, Any, AsyncIterator, Generic, Type, TypeVar
 
 from kakaorm.columns.base import AggFunc, Avg, Case, ColumnCompare, Max, Min, Sum, UpdateExpr, WhereClause
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from kakaorm.model import Model
@@ -39,6 +39,14 @@ def _to_where(clause: WhereClause | ColumnCompare) -> WhereClause:
     if isinstance(clause, ColumnCompare):
         return WhereClause(clause.sql)
     return clause
+
+
+def _init_prefetch_cache(instance: Any) -> None:
+    """インスタンスに _prefetch_cache がなければ初期化する。"""
+    try:
+        object.__getattribute__(instance, "_prefetch_cache")
+    except AttributeError:
+        object.__setattr__(instance, "_prefetch_cache", {})
 
 
 class QuerySet(Generic[T]):
@@ -79,17 +87,21 @@ class QuerySet(Generic[T]):
         self._group_by: list[str] = []
         self._having: list[WhereClause] = []
         self._joins: list[JoinClause] = []
+        self._ctes: list[tuple[str, "QuerySet"]] = []          # WITH 句
+        self._prefetch_names: list[str] = []                    # Eager loading
 
     def _clone(self) -> "QuerySet[T]":
         new = QuerySet(self._model)
-        new._where       = list(self._where)
-        new._order_by    = list(self._order_by)
-        new._limit_val   = self._limit_val
-        new._offset_val  = self._offset_val
-        new._select_cols = copy.copy(self._select_cols)
-        new._group_by    = list(self._group_by)
-        new._having      = list(self._having)
-        new._joins       = list(self._joins)
+        new._where          = list(self._where)
+        new._order_by       = list(self._order_by)
+        new._limit_val      = self._limit_val
+        new._offset_val     = self._offset_val
+        new._select_cols    = copy.copy(self._select_cols)
+        new._group_by       = list(self._group_by)
+        new._having         = list(self._having)
+        new._joins          = list(self._joins)
+        new._ctes           = list(self._ctes)
+        new._prefetch_names = list(self._prefetch_names)
         return new
 
     @property
@@ -211,12 +223,76 @@ class QuerySet(Generic[T]):
         qs._joins.append(JoinClause(model, on.sql, "RIGHT"))
         return qs
 
+    def with_cte(self, name: str, queryset: "QuerySet") -> "QuerySet[T]":
+        """
+        WITH 句（CTE）を追加する。
+
+        例::
+
+            # 閲覧数 100 以上の著者を CTE として定義し、本クエリで JOIN する
+            popular_authors = (
+                Post.all()
+                    .select(Post.author_id)
+                    .group_by(Post.author_id)
+                    .having(Sum(Post.views) >= 100)
+            )
+            rows = await (
+                Author.all()
+                    .with_cte("popular", popular_authors)
+                    .join_raw("popular", on="author.id = popular.author_id")
+                    .select(Author.name)
+            )
+
+            # 単純な再利用
+            recent = Post.where(Post.published == True).select(Post.id, Post.title)
+            rows = await Post.all().with_cte("recent_posts", recent).select(Post.title)
+        """
+        qs = self._clone()
+        qs._ctes.append((name, queryset))
+        return qs
+
+    def prefetch(self, *relation_names: str) -> "QuerySet[T]":
+        """
+        リレーションを一括プリフェッチして N+1 問題を解消する。
+
+        ``execute()`` 完了後に各リレーションを 1 回の SQL で一括取得し、
+        インスタンスのキャッシュに格納する。
+        キャッシュ後のリレーションアクセス (``await post.author``) は DB クエリを発行しない。
+
+        例::
+
+            # N+1 あり（デフォルト）
+            posts = await Post.all()
+            for post in posts:
+                author = await post.author  # 投稿ごとに SELECT が走る
+
+            # N+1 解消
+            posts = await Post.all().prefetch("author")
+            for post in posts:
+                author = await post.author  # キャッシュから返す（クエリなし）
+
+        複数リレーションを同時に指定可能::
+
+            posts = await Post.all().prefetch("author", "comments")
+        """
+        qs = self._clone()
+        qs._prefetch_names = list(self._prefetch_names) + list(relation_names)
+        return qs
+
     # ── SQL 生成 ──────────────────────────────────────────────
 
     def _build_sql(self) -> tuple[str, list[Any]]:
         """SELECT 文と bind パラメータのタプルを返す。"""
         table = self._model._meta.table_name
+
+        # CTE（WITH 句）: パラメータは主クエリより前に積む
+        cte_parts: list[str] = []
         params: list[Any] = []
+        for cte_name, cte_qs in self._ctes:
+            cte_sql, cte_params = cte_qs._build_sql()
+            cte_parts.append(f"{cte_name} AS ({cte_sql})")
+            params.extend(cte_params)
+        cte_prefix = ("WITH " + ", ".join(cte_parts) + " ") if cte_parts else ""
 
         # SELECT 句: JOIN があれば曖昧さ回避のためテーブル名を付ける
         if self._select_cols:
@@ -230,7 +306,7 @@ class QuerySet(Generic[T]):
         else:
             cols = "*"
 
-        sql = f"SELECT {cols} FROM {table}"
+        sql = f"{cte_prefix}SELECT {cols} FROM {table}"
 
         # JOIN 句
         for j in self._joins:
@@ -294,7 +370,83 @@ class QuerySet(Generic[T]):
         rows = await self._engine._fetch(sql, params)
         if self._returns_raw:
             return list(rows)
-        return [self._hydrate(row) for row in rows]
+        instances = [self._hydrate(row) for row in rows]
+        if instances and self._prefetch_names:
+            await self._do_prefetch(instances)
+        return instances
+
+    async def _do_prefetch(self, instances: list[Any]) -> None:
+        """プリフェッチ対象のリレーションを一括取得してキャッシュに格納する。"""
+        from kakaorm.relationship import (
+            _RelationshipDescriptor,
+            belongs_to,
+            has_many,
+            has_one,
+        )
+
+        for rel_name in self._prefetch_names:
+            # クラス階層から descriptor を取得
+            descriptor: Any = None
+            for cls in self._model.__mro__:
+                if rel_name in cls.__dict__:
+                    descriptor = cls.__dict__[rel_name]
+                    break
+
+            if not isinstance(descriptor, _RelationshipDescriptor):
+                raise AttributeError(
+                    f"'{self._model.__name__}' に関係 '{rel_name}' が見つかりません。"
+                    " has_many / has_one / belongs_to で定義されているか確認してください。"
+                )
+
+            related_model = descriptor.resolve_related_model()
+
+            if isinstance(descriptor, (has_many, has_one)):
+                # 1対多 / 1対1: 主キー値を集めて WHERE fk IN (...) で一括取得
+                pk_name = self._model._meta.pk_name
+                pk_vals = [inst._data[pk_name] for inst in instances]
+                if not pk_vals:
+                    for inst in instances:
+                        _init_prefetch_cache(inst)
+                        inst._prefetch_cache[rel_name] = [] if isinstance(descriptor, has_many) else None
+                    continue
+
+                fk_field = descriptor._foreign_key
+                fk_col = getattr(related_model, fk_field)
+                related_objs = await related_model.where(fk_col.in_(pk_vals)).execute()
+
+                grouped: dict[Any, list] = defaultdict(list)
+                for obj in related_objs:
+                    grouped[obj._data[fk_field]].append(obj)
+
+                is_single = isinstance(descriptor, has_one)
+                for inst in instances:
+                    _init_prefetch_cache(inst)
+                    bucket = grouped.get(inst._data[pk_name], [])
+                    inst._prefetch_cache[rel_name] = bucket[0] if (is_single and bucket) else (None if is_single else bucket)
+
+            elif isinstance(descriptor, belongs_to):
+                # 多対1: FK 値を集めて WHERE pk IN (...) で一括取得
+                fk_field = descriptor._foreign_key
+                fk_vals = list({
+                    inst._data[fk_field]
+                    for inst in instances
+                    if inst._data.get(fk_field) is not None
+                })
+                related_pk = related_model._meta.pk_name
+
+                if not fk_vals:
+                    for inst in instances:
+                        _init_prefetch_cache(inst)
+                        inst._prefetch_cache[rel_name] = None
+                    continue
+
+                pk_col = getattr(related_model, related_pk)
+                related_objs = await related_model.where(pk_col.in_(fk_vals)).execute()
+                pk_map = {obj._data[related_pk]: obj for obj in related_objs}
+
+                for inst in instances:
+                    _init_prefetch_cache(inst)
+                    inst._prefetch_cache[rel_name] = pk_map.get(inst._data.get(fk_field))
 
     async def count(self) -> int:
         """COUNT(*) を実行して件数を返す。"""

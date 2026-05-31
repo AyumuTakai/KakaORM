@@ -27,6 +27,42 @@ from __future__ import annotations
 from typing import Any
 
 
+class _CachedProxy:
+    """
+    プリフェッチ済みの値を await で即時返すプロキシ。
+
+    ``prefetch()`` でキャッシュされたリレーション値を
+    通常の ``await post.author`` と同じ記法で返す。
+    """
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value: Any) -> None:
+        self._value = value
+
+    def __await__(self):
+        async def _return() -> Any:
+            return self._value
+        return _return().__await__()
+
+    def __repr__(self) -> str:
+        return f"<CachedProxy value={self._value!r}>"
+
+
+def _check_prefetch_cache(obj: Any, name: str) -> "_CachedProxy | None":
+    """
+    インスタンスの _prefetch_cache にキャッシュがあれば _CachedProxy を返す。
+    なければ None を返す。
+    """
+    try:
+        cache = object.__getattribute__(obj, "_prefetch_cache")
+        if name in cache:
+            return _CachedProxy(cache[name])
+    except AttributeError:
+        pass
+    return None
+
+
 class _RelationshipProxy:
     """
     リレーション用デスクリプタがインスタンスアクセス時に返すプロキシ。
@@ -106,9 +142,26 @@ class _RelationshipDescriptor:
     def __set_name__(self, owner: Any, name: str) -> None:
         self._name = name
 
+    def resolve_related_model(self) -> Any:
+        """関連モデルクラスを返す。文字列の場合は Model サブクラスから解決する。"""
+        if isinstance(self._related_model, str):
+            from kakaorm.model import Model
+            for sub in _all_subclasses(Model):
+                if sub.__name__ == self._related_model:
+                    return sub
+            raise LookupError(
+                f"Model {self._related_model!r} not found. "
+                "Make sure it is imported before accessing this relationship."
+            )
+        return self._related_model
+
     def __get__(self, obj: Any, objtype: Any = None) -> Any:
         if obj is None:
             return self
+        # プリフェッチキャッシュがあれば即時返す
+        cached = _check_prefetch_cache(obj, self._name)
+        if cached is not None:
+            return cached
         if self._many:
             pk_name = obj._meta.pk_name
             pk_val = obj._data.get(pk_name)
@@ -165,6 +218,10 @@ class has_one(_RelationshipDescriptor):
     def __get__(self, obj: Any, objtype: Any = None) -> Any:
         if obj is None:
             return self
+        # プリフェッチキャッシュがあれば即時返す
+        cached = _check_prefetch_cache(obj, self._name)
+        if cached is not None:
+            return cached
         pk_val = obj._data.get(obj._meta.pk_name)
         return _RelationshipProxy(
             self._related_model, pk_val, many=True, single=True, fk_field=self._foreign_key

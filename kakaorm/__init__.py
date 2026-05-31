@@ -32,6 +32,7 @@ from kakaorm.columns.base import (
 )
 from kakaorm.relationship import has_many, has_one, belongs_to
 from kakaorm.query import Subquery
+from kakaorm.migration import Migrator, VersionedMigrator
 
 __all__ = [
     # Engine
@@ -69,4 +70,7 @@ __all__ = [
     # CASE WHEN
     "Case",
     "When",
+    # Migration
+    "Migrator",
+    "VersionedMigrator",
 ]

@@ -8,10 +8,10 @@
 
 - [x] サブクエリ (WHERE col IN/NOT IN (SELECT ...) 対応)
 - [x] CASE WHEN 式 (SELECT 列・UPDATE SET 句での条件分岐)
+- [x] CTE (WITH 句) (`QuerySet.with_cte(name, queryset)`)
 - [ ] SQL 文字列関数 (REPLACE / CONCAT / SUBSTR 等)
 - [ ] ウィンドウ関数
 - [ ] UNION / INTERSECT
-- [ ] CTE (WITH 句)
 
 ## モデル・スキーマ
 
@@ -25,7 +25,7 @@
 #### 低優先
 
 - [x] リレーション定義 (`relationship()` 前向きFK・逆参照)
-- [ ] Lazy / Eager ローディング
+- [x] Eager ローディング (`prefetch()` — has_many / has_one / belongs_to を一括取得、N+1 解消)
 - [ ] テーブル継承 (single / joined / concrete)
 - [ ] カスタム型 (`TypeDecorator` 相当)
 
@@ -50,9 +50,9 @@
 ## マイグレーション
 
 - [x] バージョン管理・履歴 (VersionedMigrator / kakaorm_migrations テーブル)
-- [ ] ダウングレード
+- [x] ダウングレード (`VersionedMigrator.downgrade(steps)` / `MigrationPlan.apply_down()`)
 - [ ] カラム型変更
-- [ ] 自動生成 (autogenerate)
+- [x] 自動生成 (autogenerate — `Migrator.autogenerate()` / `VersionedMigrator.run_files()`)
 
 ## セキュリティ
 
