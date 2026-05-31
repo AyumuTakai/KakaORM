@@ -113,29 +113,29 @@ async def main():
     print("[ 4. クエリ例 ]")
 
     # 公開済みの記事を閲覧数順に取得
-    published = await Post.filter(Post.published == True).order_by(Post.views.desc)
+    published = await Post.where(Post.published == True).order_by(Post.views.desc)
     print(f"   公開済み記事: {[p.title for p in published]}")
 
     # 閲覧数 1000 以上の記事
-    popular = await Post.filter(Post.views >= 1000)
+    popular = await Post.where(Post.views >= 1000)
     print(f"   人気記事 (1000以上): {[p.title for p in popular]}")
 
     # Alice の記事数
-    alice_count = await Post.filter(Post.author_id == alice.id).count()
+    alice_count = await Post.where(Post.author_id == alice.id).count()
     print(f"   Aliceの記事数: {alice_count}")
 
     # タイトルで部分一致検索
-    python_posts = await Post.filter(Post.title.like("%Python%"))
+    python_posts = await Post.where(Post.title.like("%Python%"))
     print(f"   「Python」を含む記事: {[p.title for p in python_posts]}")
 
     # 複合条件: 公開済み AND 閲覧数 > 500
-    good_posts = await Post.filter(
+    good_posts = await Post.where(
         (Post.published == True) & (Post.views > 500)
     ).order_by(Post.views.desc)
     print(f"   公開済み&人気: {[p.title for p in good_posts]}")
 
     # 未公開の記事が存在するか
-    has_drafts = await Post.filter(Post.published == False).exists()
+    has_drafts = await Post.where(Post.published == False).exists()
     print(f"   下書きあり: {has_drafts}")
     print()
 
@@ -150,7 +150,7 @@ async def main():
     print(f"   更新後の閲覧数: {updated.views}")
 
     # 未公開記事を一括で published=True に
-    count = await Post.filter(Post.published == False).update(published=True)
+    count = await Post.where(Post.published == False).update(published=True)
     print(f"   一括公開: {count} 件")
 
     # 特定の記事を削除

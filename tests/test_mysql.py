@@ -65,20 +65,20 @@ class TestMySQLCrud:
         result = await MySQLItem.get_or_none(MySQLItem.id == pk)
         assert result is None
 
-    async def test_filter_and_count(self, mysql_engine):
+    async def test_where_and_count(self, mysql_engine):
         await MySQLItem.create(name="date", qty=1)
         await MySQLItem.create(name="date", qty=2)
-        items = await MySQLItem.filter(MySQLItem.name == "date")
+        items = await MySQLItem.where(MySQLItem.name == "date")
         assert len(items) >= 2
-        n = await MySQLItem.filter(MySQLItem.name == "date").count()
+        n = await MySQLItem.where(MySQLItem.name == "date").count()
         assert n >= 2
 
     async def test_bulk_update_delete(self, mysql_engine):
         await MySQLItem.create(name="fig", qty=0, done=False)
         await MySQLItem.create(name="fig", qty=0, done=False)
-        updated = await MySQLItem.filter(MySQLItem.name == "fig").update(done=True)  # noqa: E712
+        updated = await MySQLItem.where(MySQLItem.name == "fig").update(done=True)  # noqa: E712
         assert updated >= 2
-        deleted = await MySQLItem.filter(MySQLItem.name == "fig").delete()
+        deleted = await MySQLItem.where(MySQLItem.name == "fig").delete()
         assert deleted >= 2
 
 

@@ -23,22 +23,22 @@ class TestScalarAggregates:
         mn = await Post.all().min(Post.views)
         assert mn == 100
 
-    async def test_sum_with_filter(self, seeded_engine):
-        total = await Post.filter(Post.published == True).sum(Post.views)  # noqa: E712
+    async def test_sum_with_where(self, seeded_engine):
+        total = await Post.where(Post.published == True).sum(Post.views)  # noqa: E712
         assert total == 3600
 
     async def test_count(self, seeded_engine):
         n = await Post.all().count()
         assert n == 4
 
-    async def test_count_with_filter(self, seeded_engine):
-        n = await Post.filter(Post.published == True).count()  # noqa: E712
+    async def test_count_with_where(self, seeded_engine):
+        n = await Post.where(Post.published == True).count()  # noqa: E712
         assert n == 3
 
 
 class TestAggregateMuti:
     async def test_aggregate_multi(self, seeded_engine):
-        stats = await Post.filter(Post.published == True).aggregate(  # noqa: E712
+        stats = await Post.where(Post.published == True).aggregate(  # noqa: E712
             total=Sum(Post.views),
             maximum=Max(Post.views),
             cnt=Count(Post.id),
@@ -82,7 +82,7 @@ class TestGroupBy:
 
     async def test_group_by_sum_having(self, seeded_engine):
         rows = await (
-            Post.filter(Post.published == True)  # noqa: E712
+            Post.where(Post.published == True)  # noqa: E712
                 .select(Post.author_id, Sum(Post.views).label("total"))
                 .group_by(Post.author_id)
                 .having(Sum(Post.views) > 500)

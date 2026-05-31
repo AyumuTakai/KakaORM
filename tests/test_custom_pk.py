@@ -62,7 +62,7 @@ class TestCustomStringPK:
         result = await Country.get_or_none(Country.code == "FR")
         assert result is None
 
-    async def test_filter_and_count(self, engine):
+    async def test_where_and_count(self, engine):
         await Country.create(code="AU", name="Australia")
         await Country.create(code="NZ", name="New Zealand")
         n = await Country.all().count()

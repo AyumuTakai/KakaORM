@@ -54,7 +54,7 @@ class RelationshipProxy:
         model = self._resolve_model()
         if self._many:
             fk_col = getattr(model, self._fk_field)
-            return await model.filter(fk_col == self._fk_value).execute()
+            return await model.where(fk_col == self._fk_value).execute()
         else:
             pk_name = model._meta.pk_name
             pk_col = getattr(model, pk_name)

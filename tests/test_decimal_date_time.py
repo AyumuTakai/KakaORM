@@ -3,7 +3,7 @@ DecimalColumn / DateColumn / TimeColumn のテスト
 ================================================
 - DB ラウンドトリップ（Python → DB → Python）
 - NULL 処理
-- ORM クエリ（filter / create / update）での動作確認
+- ORM クエリ（where / create / update）での動作確認
 """
 
 import datetime
@@ -79,10 +79,10 @@ async def test_decimal_null(engine):
 
 
 @pytest.mark.asyncio
-async def test_decimal_filter(engine):
+async def test_decimal_where(engine):
     await Product.create(name="Cheap", price=Decimal("5.00"), tax_rate=None)
     await Product.create(name="Expensive", price=Decimal("99.99"), tax_rate=None)
-    cheap = await Product.filter(Product.price == Decimal("5.00"))
+    cheap = await Product.where(Product.price == Decimal("5.00"))
     assert len(cheap) == 1
     assert cheap[0].name == "Cheap"
 
@@ -108,12 +108,12 @@ async def test_date_round_trip(engine):
 
 
 @pytest.mark.asyncio
-async def test_date_filter(engine):
+async def test_date_where(engine):
     d1 = datetime.date(2024, 1, 1)
     d2 = datetime.date(2024, 12, 31)
     await Event.create(title="New Year", event_date=d1, start_time=None)
     await Event.create(title="Year End", event_date=d2, start_time=None)
-    results = await Event.filter(Event.event_date == d1)
+    results = await Event.where(Event.event_date == d1)
     assert len(results) == 1
     assert results[0].title == "New Year"
 

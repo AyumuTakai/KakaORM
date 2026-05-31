@@ -7,7 +7,7 @@ await するまで SQL は実行されない。
 設計のポイント:
   - イミュータブルコピーを返す (元の QuerySet は変更しない)
   - SELECT / INSERT / UPDATE / DELETE を統一インターフェースで扱う
-  - __await__ を実装し `await Model.filter(...)` でもそのまま動く
+  - __await__ を実装し `await Model.where(...)` でもそのまま動く
   - JOIN / GROUP BY / 集計関数に対応
 """
 
@@ -43,11 +43,11 @@ class QuerySet(Generic[T]):
 
     例:
         # 基本フィルタ
-        users = await User.filter(User.age >= 20).order_by(User.name.asc).limit(10)
+        users = await User.where(User.age >= 20).order_by(User.name.asc).limit(10)
 
         # JOIN
         rows = await (
-            Post.filter(Post.published == True)
+            Post.where(Post.published == True)
                 .join(Author, on=Post.author_id == Author.id)
                 .select(Post.title, Author.name)
         )
@@ -90,7 +90,7 @@ class QuerySet(Generic[T]):
 
     # ── クエリ条件の積み上げ ──────────────────────────────────
 
-    def filter(self, clause: WhereClause | ColumnCompare) -> "QuerySet[T]":
+    def where(self, clause: WhereClause | ColumnCompare) -> "QuerySet[T]":
         """WHERE 条件を追加 (複数は AND で結合)。"""
         qs = self._clone()
         qs._where.append(_to_where(clause))
@@ -98,7 +98,7 @@ class QuerySet(Generic[T]):
 
     def exclude(self, clause: WhereClause | ColumnCompare) -> "QuerySet[T]":
         """NOT (clause) を追加。"""
-        return self.filter(~_to_where(clause))
+        return self.where(~_to_where(clause))
 
     def order_by(self, *cols: str) -> "QuerySet[T]":
         """ORDER BY を指定。ColumnMeta.asc / .desc や AggFunc.asc / .desc を渡す。"""
@@ -116,12 +116,8 @@ class QuerySet(Generic[T]):
         qs._offset_val = n
         return qs
 
-    def select(self, *exprs: Any) -> "QuerySet[T]":
-        """
-        取得する列・集計式・CASE WHEN 式を指定する。
-        ColumnMeta / AggFunc / Case を混在して渡せる。
-        """
-        qs = self._clone()
+    @staticmethod
+    def _parse_exprs(exprs: tuple[Any, ...]) -> list[tuple[str, list[Any]]]:
         cols: list[tuple[str, list[Any]]] = []
         for expr in exprs:
             if isinstance(expr, Case):
@@ -134,7 +130,30 @@ class QuerySet(Generic[T]):
                 cols.append((expr._qualified(), []))
             else:
                 cols.append((str(expr), []))
-        qs._select_cols = cols
+        return cols
+
+    def select(self, *exprs: Any) -> "QuerySet[T]":
+        """
+        取得する列・集計式・CASE WHEN 式を指定する（既存の SELECT を置き換える）。
+        ColumnMeta / AggFunc / Case を混在して渡せる。
+        """
+        qs = self._clone()
+        qs._select_cols = self._parse_exprs(exprs)
+        return qs
+
+    def also_select(self, *exprs: Any) -> "QuerySet[T]":
+        """
+        既存の SELECT に列・集計式・CASE WHEN 式を追加する。
+        SELECT * の状態（_select_cols が None）から呼ぶと、指定した列だけを追加する形になる。
+
+        例:
+            base = User.where(User.active == True).select(User.id, User.name)
+            with_email = base.also_select(User.email)
+            # => SELECT users.id, users.name, users.email FROM users WHERE ...
+        """
+        qs = self._clone()
+        existing = list(qs._select_cols) if qs._select_cols is not None else []
+        qs._select_cols = existing + self._parse_exprs(exprs)
         return qs
 
     def group_by(self, *exprs: Any) -> "QuerySet[T]":
@@ -375,11 +394,11 @@ class QuerySet(Generic[T]):
         例::
 
             # 固定値（従来通り）
-            await Post.filter(...).update(published=True)
+            await Post.where(...).update(published=True)
 
             # 列参照を含む式
             await Product.all().update(price=Product.price * 0.97)
-            await Employee.filter(...).update(
+            await Employee.where(...).update(
                 height=Employee.height + 5,
                 weight=Employee.weight - 2,
             )
@@ -422,7 +441,7 @@ class QuerySet(Generic[T]):
         例::
 
             await (
-                Employee.filter(Employee.hire_fiscal_year <= 1993)
+                Employee.where(Employee.hire_fiscal_year <= 1993)
                     .insert_into(Salary,
                         emp_id=Employee.id,   # ColumnMeta
                         amount=20000,          # リテラル
@@ -519,11 +538,11 @@ class Subquery:
     例::
 
         # WHERE author_id IN (SELECT id FROM author WHERE name = %s)
-        active_authors = Author.filter(Author.is_active == True).select(Author.id)
-        posts = await Post.filter(Post.author_id.in_(Subquery(active_authors)))
+        active_authors = Author.where(Author.is_active == True).select(Author.id)
+        posts = await Post.where(Post.author_id.in_(Subquery(active_authors)))
 
         # QuerySet を直接渡しても同じ動作をする
-        posts = await Post.filter(Post.author_id.in_(active_authors))
+        posts = await Post.where(Post.author_id.in_(active_authors))
     """
 
     def __init__(self, queryset: QuerySet) -> None:

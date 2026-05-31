@@ -65,7 +65,7 @@ class TestUpdateExprExecution:
         before = await Post.get(Post.title == "Python入門")
         before_views = before.views  # 2000
 
-        await Post.filter(Post.title == "Python入門").update(
+        await Post.where(Post.title == "Python入門").update(
             views=Post.views + 100
         )
 
@@ -77,7 +77,7 @@ class TestUpdateExprExecution:
         before = await Post.get(Post.title == "非同期処理")
         before_views = before.views  # 1200
 
-        await Post.filter(Post.title == "非同期処理").update(
+        await Post.where(Post.title == "非同期処理").update(
             views=Post.views - 200
         )
 
@@ -97,7 +97,7 @@ class TestUpdateExprExecution:
         """複数カラムを同時に式で更新できる。"""
         before = await Post.get(Post.title == "Python入門")
 
-        await Post.filter(Post.title == "Python入門").update(
+        await Post.where(Post.title == "Python入門").update(
             views=Post.views + 500,
             score=Post.score * 0.9,
         )
@@ -108,18 +108,18 @@ class TestUpdateExprExecution:
 
     async def test_mixed_literal_and_expr(self, seeded_engine):
         """リテラルと UpdateExpr を混在させられる。"""
-        await Post.filter(Post.published == False).update(  # noqa: E712
+        await Post.where(Post.published == False).update(  # noqa: E712
             views=Post.views + 10,   # UpdateExpr
             published=True,           # リテラル（後方互換）
         )
 
-        updated = await Post.filter(Post.title == "未公開ドラフト").first()
+        updated = await Post.where(Post.title == "未公開ドラフト").first()
         assert updated.published == True   # noqa: E712
         assert updated.views == 110        # 100 + 10
 
-    async def test_with_filter_condition(self, seeded_engine):
+    async def test_with_where_condition(self, seeded_engine):
         """WHERE 条件と組み合わせて特定行だけ更新できる。"""
-        await Post.filter(Post.views >= 1000).update(
+        await Post.where(Post.views >= 1000).update(
             views=Post.views * 2
         )
 
@@ -138,7 +138,7 @@ class TestUpdateExprExecution:
 
     async def test_no_match_returns_zero(self, seeded_engine):
         """条件に一致しない場合は 0 を返す。"""
-        n = await Post.filter(Post.views > 99999).update(
+        n = await Post.where(Post.views > 99999).update(
             views=Post.views + 1
         )
         assert n == 0

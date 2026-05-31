@@ -102,9 +102,9 @@ class TestCaseInUpdate:
         assert standard.stock == 5
         assert budget.stock == 50
 
-    async def test_case_update_with_filter(self, seeded):
-        """filter() と組み合わせた CASE UPDATE が動作すること。"""
-        await Item.filter(Item.price >= 5000).update(
+    async def test_case_update_with_where(self, seeded):
+        """where() と組み合わせた CASE UPDATE が動作すること。"""
+        await Item.where(Item.price >= 5000).update(
             name=Case(
                 When(Item.price >= 10000, then="LUXURY"),
                 default="STANDARD",

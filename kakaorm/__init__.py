@@ -75,7 +75,7 @@ class Engine(ABC):
 
             async with engine.transaction():
                 await Order.create(...)
-                await Stock.filter(...).update(qty=Stock.qty - 1)
+                await Stock.where(...).update(qty=Stock.qty - 1)
                 # 例外があれば自動ロールバック
 
         サブクラスでオーバーライドして実装する。

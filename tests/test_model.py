@@ -99,13 +99,13 @@ class TestQuerySetSqlGeneration:
         assert "FROM post" in sql
 
     def test_where(self):
-        sql, params = Post.filter(Post.views >= 100)._build_sql()
+        sql, params = Post.where(Post.views >= 100)._build_sql()
         assert "WHERE" in sql
         assert "views" in sql
         assert 100 in params
 
-    def test_multiple_filters_and(self):
-        sql, _ = Post.filter(Post.views >= 10).filter(Post.published == True)._build_sql()  # noqa: E712
+    def test_multiple_wheres_and(self):
+        sql, _ = Post.where(Post.views >= 10).where(Post.published == True)._build_sql()  # noqa: E712
         assert "AND" in sql
 
     def test_order_by(self):
@@ -159,7 +159,7 @@ class TestQuerySetSqlGeneration:
 
     def test_complex_query(self):
         sql, params = (
-            Post.filter(Post.views >= 100)
+            Post.where(Post.views >= 100)
                 .order_by(Post.views.desc)
                 .limit(10)
                 .offset(5)

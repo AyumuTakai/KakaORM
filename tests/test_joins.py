@@ -18,9 +18,9 @@ class TestInnerJoin:
         assert "title" in rows[0]
         assert "name" in rows[0]
 
-    async def test_inner_join_with_filter(self, seeded_engine):
+    async def test_inner_join_with_where(self, seeded_engine):
         rows = await (
-            Post.filter(Post.published == True)  # noqa: E712
+            Post.where(Post.published == True)  # noqa: E712
                 .join(Author, on=Post.author_id == Author.id)
                 .select(Post.title, Post.views, Author.name)
                 .order_by(Post.views.desc)
@@ -37,7 +37,7 @@ class TestInnerJoin:
 
     async def test_inner_join_author_name_present(self, seeded_engine):
         rows = await (
-            Post.filter(Post.title == "Python入門")
+            Post.where(Post.title == "Python入門")
                 .join(Author, on=Post.author_id == Author.id)
                 .select(Post.title, Author.name)
         )
@@ -69,7 +69,7 @@ class TestRightJoin:
 class TestJoinWithGroupBy:
     async def test_join_group_by(self, seeded_engine):
         rows = await (
-            Post.filter(Post.published == True)  # noqa: E712
+            Post.where(Post.published == True)  # noqa: E712
                 .join(Author, on=Post.author_id == Author.id)
                 .select(Author.name, Count(Post.id).label("post_count"))
                 .group_by(Author.name)

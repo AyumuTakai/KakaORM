@@ -50,8 +50,8 @@ async def seeded(engine):
 class TestInSubquery:
     async def test_in_with_queryset(self, seeded):
         """QuerySet を直接 in_() に渡せること。"""
-        active_ids = SqAuthor.filter(SqAuthor.is_active == True).select(SqAuthor.id)
-        posts = await SqPost.filter(SqPost.author_id.in_(active_ids))
+        active_ids = SqAuthor.where(SqAuthor.is_active == True).select(SqAuthor.id)
+        posts = await SqPost.where(SqPost.author_id.in_(active_ids))
         titles = {p.title for p in posts}
         assert "Alice Post 1" in titles
         assert "Alice Post 2" in titles
@@ -60,27 +60,27 @@ class TestInSubquery:
 
     async def test_in_with_subquery_wrapper(self, seeded):
         """Subquery() でラップしても同じ結果になること。"""
-        active_ids = SqAuthor.filter(SqAuthor.is_active == True).select(SqAuthor.id)
-        posts = await SqPost.filter(SqPost.author_id.in_(Subquery(active_ids)))
+        active_ids = SqAuthor.where(SqAuthor.is_active == True).select(SqAuthor.id)
+        posts = await SqPost.where(SqPost.author_id.in_(Subquery(active_ids)))
         assert len(posts) == 3
 
     async def test_not_in_with_queryset(self, seeded):
         """not_in() にサブクエリを渡せること。"""
-        active_ids = SqAuthor.filter(SqAuthor.is_active == True).select(SqAuthor.id)
-        posts = await SqPost.filter(SqPost.author_id.not_in(active_ids))
+        active_ids = SqAuthor.where(SqAuthor.is_active == True).select(SqAuthor.id)
+        posts = await SqPost.where(SqPost.author_id.not_in(active_ids))
         assert len(posts) == 1
         assert posts[0].title == "Bob Post"
 
     async def test_subquery_with_where_and_select(self, seeded):
         """サブクエリ側に WHERE と SELECT を組み合わせられること。"""
         high_view_ids = (
-            SqAuthor.filter(SqAuthor.is_active == True)
+            SqAuthor.where(SqAuthor.is_active == True)
                     .select(SqAuthor.id)
         )
         # 高 views の記事の author_id が high_view_ids に含まれるもの
         posts = await (
-            SqPost.filter(SqPost.views >= 200)
-                  .filter(SqPost.author_id.in_(high_view_ids))
+            SqPost.where(SqPost.views >= 200)
+                  .where(SqPost.author_id.in_(high_view_ids))
         )
         assert len(posts) == 2
         titles = {p.title for p in posts}
@@ -90,17 +90,17 @@ class TestInSubquery:
     async def test_subquery_params_passed_correctly(self, seeded):
         """サブクエリのバインドパラメータが正しく伝播すること。"""
         # is_active == True の著者 (バインドパラメータあり) の ID に絞り込む
-        active_ids = SqAuthor.filter(SqAuthor.is_active == True).select(SqAuthor.id)
-        count = await SqPost.filter(SqPost.author_id.in_(active_ids)).count()
+        active_ids = SqAuthor.where(SqAuthor.is_active == True).select(SqAuthor.id)
+        count = await SqPost.where(SqPost.author_id.in_(active_ids)).count()
         assert count == 3
 
     async def test_subquery_repr(self, seeded):
-        qs = SqAuthor.filter(SqAuthor.is_active == True).select(SqAuthor.id)
+        qs = SqAuthor.where(SqAuthor.is_active == True).select(SqAuthor.id)
         sub = Subquery(qs)
         assert "Subquery" in repr(sub)
         assert "sq_author" in repr(sub)
 
     async def test_in_list_still_works(self, seeded):
         """リストを渡す従来の in_() が引き続き動作すること。"""
-        posts = await SqPost.filter(SqPost.views.in_([100, 200]))
+        posts = await SqPost.where(SqPost.views.in_([100, 200]))
         assert len(posts) == 2

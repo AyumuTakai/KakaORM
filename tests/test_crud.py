@@ -57,14 +57,14 @@ class TestGet:
 
 
 class TestFilter:
-    async def test_filter_returns_matching(self, engine):
+    async def test_where_returns_matching(self, engine):
         await Author.create(name="Grace", email="grace@example.com")
         await Author.create(name="Heidi", email="heidi@example.com")
-        results = await Author.filter(Author.name == "Grace")
+        results = await Author.where(Author.name == "Grace")
         assert len(results) == 1
         assert results[0].name == "Grace"
 
-    async def test_filter_all(self, engine):
+    async def test_where_all(self, engine):
         await Author.create(name="Ivan", email="ivan@example.com")
         await Author.create(name="Judy", email="judy@example.com")
         results = await Author.all()
@@ -78,10 +78,10 @@ class TestFilter:
 
     async def test_exists_true(self, engine):
         await Author.create(name="Exists", email="exists@example.com")
-        assert await Author.filter(Author.name == "Exists").exists() is True
+        assert await Author.where(Author.name == "Exists").exists() is True
 
     async def test_exists_false(self, engine):
-        assert await Author.filter(Author.name == "NoSuchUser12345").exists() is False
+        assert await Author.where(Author.name == "NoSuchUser12345").exists() is False
 
     async def test_order_by(self, engine):
         await Post.create(title="Z", views=10)
@@ -109,14 +109,14 @@ class TestFilter:
     async def test_in(self, engine):
         await Post.create(title="InTest1", views=1)
         await Post.create(title="InTest2", views=2)
-        posts = await Post.filter(Post.views.in_([1, 2]))
+        posts = await Post.where(Post.views.in_([1, 2]))
         assert len(posts) == 2
 
     async def test_async_for(self, engine):
         await Post.create(title="Iter1", views=10)
         await Post.create(title="Iter2", views=20)
         collected = []
-        async for post in Post.filter(Post.title.like("Iter%")):
+        async for post in Post.where(Post.title.like("Iter%")):
             collected.append(post.title)
         assert len(collected) == 2
 
@@ -132,9 +132,9 @@ class TestUpdate:
     async def test_bulk_update(self, engine):
         await Post.create(title="BulkA", views=0, published=False)
         await Post.create(title="BulkB", views=0, published=False)
-        updated = await Post.filter(Post.published == False).update(views=999)  # noqa: E712
+        updated = await Post.where(Post.published == False).update(views=999)  # noqa: E712
         assert updated >= 2
-        posts = await Post.filter(Post.views == 999)
+        posts = await Post.where(Post.views == 999)
         assert len(posts) >= 2
 
 
@@ -148,9 +148,9 @@ class TestDelete:
 
     async def test_bulk_delete(self, engine):
         await Post.create(title="DelMe", views=0)
-        before = await Post.filter(Post.title == "DelMe").count()
+        before = await Post.where(Post.title == "DelMe").count()
         assert before >= 1
-        deleted = await Post.filter(Post.title == "DelMe").delete()
+        deleted = await Post.where(Post.title == "DelMe").delete()
         assert deleted >= 1
-        after = await Post.filter(Post.title == "DelMe").count()
+        after = await Post.where(Post.title == "DelMe").count()
         assert after == 0

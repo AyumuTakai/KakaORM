@@ -6,7 +6,7 @@ Pydantic の BaseModel を継承しているため、
 モデルインスタンスがそのままバリデーション/シリアライズ仕様になる。
 
 設計のポイント:
-  - モデルクラス自体がクエリのエントリポイント (User.filter(...))
+  - モデルクラス自体がクエリのエントリポイント (User.where(...))
   - ColumnMeta が演算子オーバーロードでWhereClauseを生成
   - save() / delete() は常に await が必要 → asyncの一貫性を強制
   - _is_new フラグで INSERT / UPDATE を判別する
@@ -135,7 +135,7 @@ class Model(metaclass=AsyncORMMeta):
             email: str = StrColumn(unique=True)
 
         # クエリ
-        users = await User.filter(User.age >= 20).all()
+        users = await User.where(User.age >= 20).all()
         user  = await User.get(User.id == 1)
 
         # 保存
@@ -219,11 +219,11 @@ class Model(metaclass=AsyncORMMeta):
     # ── クラスメソッド: クエリエントリポイント ─────────────────
 
     @classmethod
-    def filter(cls: Type[T], *clauses: WhereClause) -> "QuerySet[T]":
+    def where(cls: Type[T], *clauses: WhereClause) -> "QuerySet[T]":
         from kakaorm.query import QuerySet
         qs = QuerySet(cls)
         for c in clauses:
-            qs = qs.filter(c)
+            qs = qs.where(c)
         return qs
 
     @classmethod
@@ -237,7 +237,7 @@ class Model(metaclass=AsyncORMMeta):
         from kakaorm.query import QuerySet
         qs = QuerySet(cls)
         for c in clauses:
-            qs = qs.filter(c)
+            qs = qs.where(c)
         results = await qs.limit(2).execute()
         if not results:
             raise cls.NotFound(f"{cls.__name__} not found")
@@ -274,7 +274,7 @@ class Model(metaclass=AsyncORMMeta):
         """
         テーブルの全行を削除し、オートインクリメントシーケンスをリセットする。
 
-        通常の ``filter().delete()`` と異なり、シーケンスも初期化される。
+        通常の ``where().delete()`` と異なり、シーケンスも初期化される。
 
         例::
 

@@ -96,7 +96,7 @@ class TestFetchval:
         n = await seeded_engine.fetchval("SELECT COUNT(*) FROM post")
         assert n == 4
 
-    async def test_count_with_filter(self, seeded_engine):
+    async def test_count_with_where(self, seeded_engine):
         """条件付き COUNT が動く。"""
         n = await seeded_engine.fetchval(
             "SELECT COUNT(*) FROM post WHERE published = %s", [1]

@@ -46,7 +46,7 @@ class TestInsertIntoBasic:
     async def test_returns_inserted_count(self, seeded_engine, ext_engine):
         """戻り値が挿入行数になっている。"""
         n = await (
-            Post.filter(Post.published == True)  # noqa: E712
+            Post.where(Post.published == True)  # noqa: E712
                 .insert_into(PostArchive,
                     title=Post.title,
                     views=Post.views,
@@ -58,7 +58,7 @@ class TestInsertIntoBasic:
     async def test_data_actually_inserted(self, seeded_engine, ext_engine):
         """insert_into 後に行が実際に存在する。"""
         await (
-            Post.filter(Post.published == True)  # noqa: E712
+            Post.where(Post.published == True)  # noqa: E712
                 .insert_into(PostArchive,
                     title=Post.title,
                     views=Post.views,
@@ -89,7 +89,7 @@ class TestInsertIntoLiteral:
     async def test_literal_value_stored(self, seeded_engine, ext_engine):
         """リテラル値がバインドパラメータとして正しく格納される。"""
         await (
-            Post.filter(Post.published == True)  # noqa: E712
+            Post.where(Post.published == True)  # noqa: E712
                 .insert_into(PostArchive,
                     title=Post.title,
                     views=0,            # リテラル: 閲覧数をリセット
@@ -118,7 +118,7 @@ class TestInsertIntoLiteral:
         """全カラムがリテラルの場合でも動作する。"""
         await Author.create(name="Test", email="t@example.com")
         n = await (
-            Author.filter(Author.name == "Test")
+            Author.where(Author.name == "Test")
                 .insert_into(SalaryLog,
                     emp_id=1,
                     amount=10000.0,
@@ -131,9 +131,9 @@ class TestInsertIntoLiteral:
 
 class TestInsertIntoWithQueryOptions:
     async def test_with_filter(self, seeded_engine, ext_engine):
-        """filter() で絞った行だけ INSERT される。"""
+        """where() で絞った行だけ INSERT される。"""
         n = await (
-            Post.filter(Post.views >= 1000)
+            Post.where(Post.views >= 1000)
                 .insert_into(PostArchive,
                     title=Post.title,
                     views=Post.views,
@@ -161,7 +161,7 @@ class TestInsertIntoWithQueryOptions:
     async def test_no_match_inserts_zero(self, seeded_engine, ext_engine):
         """条件に一致する行がない場合は 0 を返す。"""
         n = await (
-            Post.filter(Post.views > 99999)
+            Post.where(Post.views > 99999)
                 .insert_into(PostArchive,
                     title=Post.title,
                     views=Post.views,
@@ -178,7 +178,7 @@ class TestInsertIntoSameTable:
         """同じテーブルに条件付きでコピーできる（self-INSERT）。"""
         before = await Post.all().count()
         n = await (
-            Post.filter(Post.published == True)  # noqa: E712
+            Post.where(Post.published == True)  # noqa: E712
                 .insert_into(Post,
                     title=Post.title,
                     body=Post.body,
@@ -197,7 +197,7 @@ class TestInsertIntoSameTable:
 class TestInsertIntoSql:
     def test_sql_structure_column_ref(self):
         """ColumnMeta はパラメータなしの列参照として展開される。"""
-        qs = Post.filter(Post.published == True)  # noqa: E712
+        qs = Post.where(Post.published == True)  # noqa: E712
         # insert_into は async なので SQL 生成のみ内部確認
         dest_table = PostArchive._meta.table_name
         src_table  = Post._meta.table_name

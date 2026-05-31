@@ -46,8 +46,8 @@ class TestBulkCreateBasic:
         ]
         await Author.bulk_create(instances)
 
-        assert await Author.filter(Author.name == "Alice").count() == 1
-        assert await Author.filter(Author.name == "Bob").count() == 1
+        assert await Author.where(Author.name == "Alice").count() == 1
+        assert await Author.where(Author.name == "Bob").count() == 1
 
     async def test_values_correct(self, engine):
         """各フィールドの値が正しく保存される。"""

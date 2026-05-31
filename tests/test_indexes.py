@@ -49,7 +49,7 @@ class TestIndexes:
         await Product.create(name="Wrench", category="tools",     price=300)
         await Product.create(name="Screw",  category="fasteners", price=5)
 
-        results = await Product.filter(Product.category == "fasteners").order_by(Product.price.asc)
+        results = await Product.where(Product.category == "fasteners").order_by(Product.price.asc)
         assert len(results) == 2
         assert results[0].price == 5
         assert results[1].price == 10

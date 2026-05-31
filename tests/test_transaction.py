@@ -22,7 +22,7 @@ class TestTransactionCommit:
             await Post.create(title="Post1", views=10, author_id=alice.id)
             await Post.create(title="Post2", views=20, author_id=alice.id)
 
-        posts = await Post.filter(Post.author_id == alice.id)
+        posts = await Post.where(Post.author_id == alice.id)
         assert len(posts) == 2
 
     async def test_update_committed(self, engine):
@@ -30,7 +30,7 @@ class TestTransactionCommit:
         author = await Author.create(name="Before", email="before@example.com")
 
         async with engine.transaction():
-            await Author.filter(Author.id == author.id).update(name="After")
+            await Author.where(Author.id == author.id).update(name="After")
 
         updated = await Author.get(Author.id == author.id)
         assert updated.name == "After"
@@ -59,8 +59,8 @@ class TestTransactionRollback:
         except ValueError:
             pass
 
-        assert await Author.filter(Author.name == "Partial1").count() == 0
-        assert await Author.filter(Author.name == "Partial2").count() == 0
+        assert await Author.where(Author.name == "Partial1").count() == 0
+        assert await Author.where(Author.name == "Partial2").count() == 0
 
     async def test_exception_propagates(self, engine):
         """ロールバック後に例外が呼び出し元に伝播する。"""
@@ -95,7 +95,7 @@ class TestTransactionIsolation:
         author = await Author.create(name="Original", email="orig@example.com")
 
         async with engine.transaction():
-            await Author.filter(Author.id == author.id).update(name="Modified")
+            await Author.where(Author.id == author.id).update(name="Modified")
             refetch = await Author.get(Author.id == author.id)
             assert refetch.name == "Modified"
 
@@ -104,8 +104,8 @@ class TestTransactionIsolation:
         await Author.create(name="ToDelete", email="del@example.com")
 
         async with engine.transaction():
-            await Author.filter(Author.name == "ToDelete").delete()
-            count = await Author.filter(Author.name == "ToDelete").count()
+            await Author.where(Author.name == "ToDelete").delete()
+            count = await Author.where(Author.name == "ToDelete").count()
             assert count == 0
 
     async def test_mixed_crud_in_transaction(self, engine):
@@ -114,9 +114,9 @@ class TestTransactionIsolation:
 
         async with engine.transaction():
             new_author = await Author.create(name="New", email="new@example.com")
-            await Author.filter(Author.id == existing.id).update(name="Updated")
+            await Author.where(Author.id == existing.id).update(name="Updated")
             await Post.create(title="TxPost", views=0, author_id=new_author.id)
 
-        assert await Author.filter(Author.name == "Updated").count() == 1
-        assert await Author.filter(Author.name == "New").count() == 1
-        assert await Post.filter(Post.title == "TxPost").count() == 1
+        assert await Author.where(Author.name == "Updated").count() == 1
+        assert await Author.where(Author.name == "New").count() == 1
+        assert await Post.where(Post.title == "TxPost").count() == 1
