@@ -127,6 +127,22 @@ class ColumnCompare:
         return ColumnCompare(f"({self.sql}) OR ({other.sql})")
 
 
+# ── UPDATE 式 ─────────────────────────────────────────────────
+
+@dataclass
+class UpdateExpr:
+    """
+    列参照を含む UPDATE の SET 式。
+    ColumnMeta の算術演算子から生成される。
+
+    例:
+        Employee.height - 2   → UpdateExpr("employee.height - %s", [2])
+        Product.price * 0.97  → UpdateExpr("product.price * %s", [0.97])
+    """
+    sql: str
+    params: list[Any] = field(default_factory=list)
+
+
 @dataclass
 class WhereClause:
     """SQL WHERE句のフラグメント。複数を AND/OR で結合できる。"""
@@ -221,6 +237,28 @@ class ColumnMeta:
 
     def between(self, low: Any, high: Any) -> WhereClause:
         return WhereClause(f"{self._qualified()} BETWEEN %s AND %s", [low, high])
+
+    # ── 算術演算子（UPDATE 式生成用）────────────────────────────
+    def __add__(self, other: Any) -> "UpdateExpr":
+        return UpdateExpr(f"{self._qualified()} + %s", [other])
+
+    def __sub__(self, other: Any) -> "UpdateExpr":
+        return UpdateExpr(f"{self._qualified()} - %s", [other])
+
+    def __mul__(self, other: Any) -> "UpdateExpr":
+        return UpdateExpr(f"{self._qualified()} * %s", [other])
+
+    def __truediv__(self, other: Any) -> "UpdateExpr":
+        return UpdateExpr(f"{self._qualified()} / %s", [other])
+
+    def __radd__(self, other: Any) -> "UpdateExpr":
+        return UpdateExpr(f"%s + {self._qualified()}", [other])
+
+    def __rsub__(self, other: Any) -> "UpdateExpr":
+        return UpdateExpr(f"%s - {self._qualified()}", [other])
+
+    def __rmul__(self, other: Any) -> "UpdateExpr":
+        return UpdateExpr(f"%s * {self._qualified()}", [other])
 
     @property
     def asc(self) -> str:

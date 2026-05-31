@@ -17,7 +17,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Generic, Type, TypeVar
 
-from kakaorm.columns.base import AggFunc, Avg, ColumnCompare, Count, Max, Min, Sum, WhereClause
+from kakaorm.columns.base import AggFunc, Avg, ColumnCompare, Count, Max, Min, Sum, UpdateExpr, WhereClause
 
 T = TypeVar("T", bound="Model")  # type: ignore[type-arg]
 
@@ -346,20 +346,129 @@ class QuerySet(Generic[T]):
         return await engine._execute(sql, params)
 
     async def update(self, **values: Any) -> int:
-        """条件に一致するレコードを一括 UPDATE し更新件数を返す。"""
+        """
+        条件に一致するレコードを一括 UPDATE し更新件数を返す。
+
+        値に UpdateExpr (ColumnMeta の算術演算子の結果) を渡すと
+        列参照を含む式として展開される。
+
+        例::
+
+            # 固定値（従来通り）
+            await Post.filter(...).update(published=True)
+
+            # 列参照を含む式
+            await Product.all().update(price=Product.price * 0.97)
+            await Employee.filter(...).update(
+                height=Employee.height + 5,
+                weight=Employee.weight - 2,
+            )
+        """
         engine = self._model._engine
         if engine is None:
             raise RuntimeError("No engine connected.")
         table = self._model._meta.table_name
-        set_parts = [f"{k} = %s" for k in values]
+        set_parts: list[str] = []
+        params: list[Any] = []
+        for k, v in values.items():
+            if isinstance(v, UpdateExpr):
+                set_parts.append(f"{k} = {v.sql}")
+                params.extend(v.params)
+            else:
+                set_parts.append(f"{k} = %s")
+                params.append(v)
         sql = f"UPDATE {table} SET {', '.join(set_parts)}"
-        params: list[Any] = list(values.values())
         if self._where:
             merged = self._where[0]
             for clause in self._where[1:]:
                 merged = merged & clause
             sql += f" WHERE {merged.sql}"
             params.extend(merged.params)
+        return await engine._execute(sql, params)
+
+    async def insert_into(self, dest_model: Any, **mapping: Any) -> int:
+        """
+        SELECT 結果を別テーブルへ一括 INSERT する (INSERT ... SELECT)。
+
+        mapping のキー   → 挿入先カラム名
+        mapping の値:
+          - ColumnMeta → SELECT 式として展開（バインドパラメータなし）
+          - その他      → リテラル値（バインドパラメータとして展開）
+
+        例::
+
+            await (
+                Employee.filter(Employee.hire_fiscal_year <= 1993)
+                    .insert_into(Salary,
+                        emp_id=Employee.id,   # ColumnMeta
+                        amount=20000,          # リテラル
+                    )
+            )
+            # INSERT INTO salary (emp_id, amount)
+            # SELECT employee.id, ?
+            # FROM employee WHERE hire_fiscal_year <= ?
+
+        戻り値: 挿入した行数
+        """
+        engine = self._model._engine
+        if engine is None:
+            raise RuntimeError("No engine connected.")
+
+        dest_table = dest_model._meta.table_name
+        src_table = self._model._meta.table_name
+
+        dest_cols: list[str] = []
+        select_exprs: list[str] = []
+        literal_params: list[Any] = []
+
+        for col_name, value in mapping.items():
+            dest_cols.append(col_name)
+            if hasattr(value, "_qualified"):  # ColumnMeta
+                select_exprs.append(value._qualified())
+            else:
+                select_exprs.append("%s")
+                literal_params.append(value)
+
+        sql = (
+            f"INSERT INTO {dest_table} ({', '.join(dest_cols)})"
+            f" SELECT {', '.join(select_exprs)} FROM {src_table}"
+        )
+        # リテラルパラメータが SELECT 句、WHERE 句パラメータがその後に続く
+        params: list[Any] = list(literal_params)
+
+        # JOIN 句
+        for j in self._joins:
+            join_table = j.model._meta.table_name
+            sql += f" {j.join_type} JOIN {join_table} ON {j.on_sql}"
+
+        # WHERE 句
+        if self._where:
+            merged = self._where[0]
+            for clause in self._where[1:]:
+                merged = merged & clause
+            sql += f" WHERE {merged.sql}"
+            params.extend(merged.params)
+
+        # GROUP BY / HAVING
+        if self._group_by:
+            sql += " GROUP BY " + ", ".join(self._group_by)
+        if self._having:
+            merged_h = self._having[0]
+            for clause in self._having[1:]:
+                merged_h = merged_h & clause
+            sql += f" HAVING {merged_h.sql}"
+            params.extend(merged_h.params)
+
+        # ORDER BY / LIMIT / OFFSET
+        if self._order_by:
+            sql += " ORDER BY " + ", ".join(self._order_by)
+        if self._limit_val is not None:
+            sql += f" LIMIT {self._limit_val}"
+        elif self._offset_val is not None:
+            sql += " LIMIT -1"
+        if self._offset_val is not None:
+            sql += f" OFFSET {self._offset_val}"
+
         return await engine._execute(sql, params)
 
     # ── Python 組み込みプロトコル ─────────────────────────────
