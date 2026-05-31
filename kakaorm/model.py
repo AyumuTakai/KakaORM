@@ -204,6 +204,22 @@ class Model(metaclass=AsyncORMMeta):
         return instance
 
     @classmethod
+    async def truncate(cls, *, restart_identity: bool = True) -> None:
+        """
+        テーブルの全行を削除し、オートインクリメントシーケンスをリセットする。
+
+        通常の ``filter().delete()`` と異なり、シーケンスも初期化される。
+
+        例::
+
+            await User.truncate()           # 全行削除 + ID リセット
+            await User.truncate(restart_identity=False)  # 全行削除のみ
+        """
+        if cls._engine is None:
+            raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
+        await cls._engine.truncate(cls, restart_identity=restart_identity)
+
+    @classmethod
     async def bulk_create(
         cls: Type[T],
         instances: list[T],

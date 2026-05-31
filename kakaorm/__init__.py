@@ -209,6 +209,18 @@ class Engine(ABC):
         sql = f"DROP TABLE {exists}{meta.table_name}"
         await self._execute(sql, [])
 
+    async def truncate(self, model_cls: Any, *, restart_identity: bool = True) -> None:
+        """
+        テーブルの全行を削除し、シーケンス (AUTO INCREMENT) をリセットする。
+
+        PostgreSQL では ``TRUNCATE TABLE ... RESTART IDENTITY``、
+        MySQL では ``TRUNCATE TABLE`` を発行する。
+        SQLite は TRUNCATE 非対応のため ``AioSQLiteEngine`` でオーバーライドする。
+        """
+        table = model_cls._meta.table_name
+        restart = " RESTART IDENTITY" if restart_identity else ""
+        await self._execute(f"TRUNCATE TABLE {table}{restart}", [])
+
     # ── サブクラスが上書きするプレースホルダー形式 ────────────
 
     def _placeholders(self, n: int) -> str:
@@ -460,6 +472,19 @@ class AioSQLiteEngine(Engine):
         )
         await self._execute(sql, [])
 
+    async def truncate(self, model_cls: Any, *, restart_identity: bool = True) -> None:
+        """SQLite 用: DELETE FROM で全行削除し、sqlite_sequence でシーケンスをリセット。"""
+        table = model_cls._meta.table_name
+        await self._execute(f"DELETE FROM {table}", [])
+        if restart_identity:
+            try:
+                await self._execute(
+                    "DELETE FROM sqlite_sequence WHERE name = %s", [table]
+                )
+            except Exception:
+                # sqlite_sequence が存在しない場合 (未挿入テーブル) は無視
+                pass
+
     @staticmethod
     def _normalize_sql(sql: str) -> str:
         """%s プレースホルダーを ? に変換する。"""
@@ -572,6 +597,11 @@ class AioMySQLEngine(Engine):
                 raise
             finally:
                 _tx_conn.reset(token)
+
+    async def truncate(self, model_cls: Any, *, restart_identity: bool = True) -> None:
+        """MySQL 用: TRUNCATE TABLE は常に AUTO_INCREMENT をリセットする。"""
+        table = model_cls._meta.table_name
+        await self._execute(f"TRUNCATE TABLE {table}", [])
 
     async def create_table(self, model_cls: Any, *, if_not_exists: bool = True) -> None:
         """MySQL 用: SERIAL → INT AUTO_INCREMENT、TIMESTAMP WITH TIME ZONE → DATETIME"""

@@ -105,6 +105,7 @@ class DecimalColumn(Column[Decimal]):
         super().__init__(**kwargs)
         self.max_digits = max_digits
         self.decimal_places = decimal_places
+        self.sql_type = f"NUMERIC({max_digits},{decimal_places})"
 
     def from_db(self, value: Any) -> Decimal | None:
         if value is None:
@@ -115,16 +116,6 @@ class DecimalColumn(Column[Decimal]):
         if value is None:
             return None
         return str(Decimal(str(value)))
-
-    def ddl_fragment(self) -> str:
-        parts = [f"NUMERIC({self.max_digits},{self.decimal_places})"]
-        if self.primary_key:
-            parts.append("PRIMARY KEY")
-        if not self.nullable and not self.primary_key:
-            parts.append("NOT NULL")
-        if self.unique:
-            parts.append("UNIQUE")
-        return " ".join(parts)
 
 
 class DateColumn(Column[datetime.date]):

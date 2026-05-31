@@ -2,7 +2,7 @@
 
 ## クエリ機能
 
-- [ ] TRUNCATE (DELETE と異なりシーケンスもリセット)
+- [x] TRUNCATE (DELETE と異なりシーケンスもリセット)
 
 #### 低優先
 
@@ -17,9 +17,9 @@
 
 - [ ] 複合主キー (PRIMARY KEY(col1, col2))
 - [ ] ユーザー定義主キー (auto id を使わない任意カラムを PK に指定)
-- [ ] NUMERIC / DECIMAL 型 (FloatColumn は DOUBLE PRECISION で精度が異なる)
-- [ ] DATE 型 / TIME 型 (DateTimeColumn は TIMESTAMP; 日付のみ・時刻のみの型がない)
-- [ ] CHECK 制約
+- [x] NUMERIC / DECIMAL 型 (FloatColumn は DOUBLE PRECISION で精度が異なる)
+- [x] DATE 型 / TIME 型 (DateTimeColumn は TIMESTAMP; 日付のみ・時刻のみの型がない)
+- [x] CHECK 制約
 - [ ] 複合インデックス
 
 #### 低優先

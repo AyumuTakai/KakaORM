@@ -296,12 +296,14 @@ class Column(Generic[T]):
         default: Any = None,
         unique: bool = False,
         index: bool = False,
+        check: str | None = None,
     ) -> None:
         self.primary_key = primary_key
         self.nullable = nullable
         self.default = default
         self.unique = unique
         self.index = index
+        self.check = check
         self._name: str = ""
 
     # ── デスクリプタプロトコル ────────────────────────────────
@@ -343,6 +345,8 @@ class Column(Generic[T]):
             parts.append("NOT NULL")
         if self.unique:
             parts.append("UNIQUE")
+        if self.check:
+            parts.append(f"CHECK ({self.check})")
         return " ".join(parts)
 
     def __repr__(self) -> str:
