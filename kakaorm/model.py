@@ -2,14 +2,15 @@
 Model クラス
 ============
 メタクラスがクラス定義時にカラムを自動収集する。
-Pydantic の BaseModel を継承しているため、
-モデルインスタンスがそのままバリデーション/シリアライズ仕様になる。
+Pydantic v2 プロトコル (__get_pydantic_core_schema__ / __get_pydantic_json_schema__)
+を実装しており、FastAPI の response_model に直接指定できる。
 
 設計のポイント:
   - モデルクラス自体がクエリのエントリポイント (User.where(...))
   - ColumnMeta が演算子オーバーロードでWhereClauseを生成
   - save() / delete() は常に await が必要 → asyncの一貫性を強制
   - _is_new フラグで INSERT / UPDATE を判別する
+  - Pydantic は optional 依存。未インストールでも通常の ORM 機能は動作する
 """
 
 from __future__ import annotations
@@ -347,6 +348,161 @@ class Model(metaclass=AsyncORMMeta):
     def to_dict(self) -> dict[str, Any]:
         """現在のフィールド値を辞書として返す。"""
         return dict(self._data)
+
+    # ── Pydantic v2 プロトコル ────────────────────────────────
+
+    def model_dump(
+        self,
+        *,
+        exclude_none: bool = False,
+        exclude: "set[str] | None" = None,
+    ) -> "dict[str, Any]":
+        """
+        Pydantic 互換のシリアライズメソッド。
+
+        例::
+
+            user.model_dump()
+            # → {"id": 1, "name": "Alice", "age": 30}
+
+            user.model_dump(exclude_none=True)
+            user.model_dump(exclude={"password"})
+        """
+        data = self.to_dict()
+        if exclude:
+            data = {k: v for k, v in data.items() if k not in exclude}
+        if exclude_none:
+            data = {k: v for k, v in data.items() if v is not None}
+        return data
+
+    @classmethod
+    def model_validate(cls: "Type[T]", obj: Any) -> "T":
+        """
+        Pydantic 互換のバリデーション・変換メソッド。
+        dict・同型インスタンス・from_attributes 対応オブジェクトを受け取る。
+
+        例::
+
+            user = User.model_validate({"name": "Alice", "age": 30})
+            user = User.model_validate(other_user)
+        """
+        if isinstance(obj, cls):
+            return obj
+        if isinstance(obj, dict):
+            known = {k: v for k, v in obj.items() if k in cls._meta.columns}
+            return cls(**known)
+        # from_attributes: 任意オブジェクトの属性から生成
+        data = {
+            col_name: getattr(obj, col_name, None)
+            for col_name in cls._meta.columns
+        }
+        instance = cls(**data)
+        instance._is_new = False
+        return instance
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: Any) -> Any:
+        """
+        Pydantic v2 コアスキーマ。FastAPI の response_model に直接指定できるようにする。
+
+        - バリデーション: dict → Model インスタンスに変換
+        - シリアライズ: Model インスタンス → dict (to_dict() 経由)
+
+        例::
+
+            @app.get("/users/{id}", response_model=User)
+            async def get_user(id: int):
+                return await User.get(User.id == id)
+        """
+        try:
+            from pydantic_core import core_schema as cs
+        except ImportError:
+            raise ImportError(
+                "Pydantic との統合には pydantic が必要です: pip install pydantic"
+            )
+
+        def _validate(v: Any) -> Any:
+            if isinstance(v, cls):
+                return v
+            if isinstance(v, dict):
+                known = {k: val for k, val in v.items() if k in cls._meta.columns}
+                return cls(**known)
+            # from_attributes 的な使い方
+            data = {
+                col_name: getattr(v, col_name, None)
+                for col_name in cls._meta.columns
+            }
+            instance = cls(**data)
+            instance._is_new = False
+            return instance
+
+        return cs.no_info_plain_validator_function(
+            _validate,
+            serialization=cs.plain_serializer_function_ser_schema(
+                lambda v: v.to_dict(),
+                info_arg=False,
+            ),
+        )
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, _core_schema: Any, handler: Any) -> "dict[str, Any]":
+        """
+        Pydantic v2 JSON スキーマ。Swagger UI / OpenAPI ドキュメントに
+        カラム定義を反映させる。
+        """
+        from kakaorm.columns.types import (
+            IntColumn, StrColumn, FloatColumn, BoolColumn,
+            DateTimeColumn, DateColumn, TimeColumn, DecimalColumn, ForeignKey,
+        )
+
+        properties: dict[str, Any] = {}
+        required: list[str] = []
+
+        for col_name, col in cls._meta.columns.items():
+            # カラム型 → JSON Schema 型マッピング
+            if isinstance(col, (IntColumn, ForeignKey)):
+                prop: dict[str, Any] = {"type": "integer"}
+            elif isinstance(col, StrColumn):
+                prop = {"type": "string"}
+                if getattr(col, "max_length", None):
+                    prop["maxLength"] = col.max_length  # type: ignore[attr-defined]
+            elif isinstance(col, FloatColumn):
+                prop = {"type": "number"}
+            elif isinstance(col, BoolColumn):
+                prop = {"type": "boolean"}
+            elif isinstance(col, DateTimeColumn):
+                prop = {"type": "string", "format": "date-time"}
+            elif isinstance(col, DateColumn):
+                prop = {"type": "string", "format": "date"}
+            elif isinstance(col, TimeColumn):
+                prop = {"type": "string", "format": "time"}
+            elif isinstance(col, DecimalColumn):
+                prop = {"type": "string", "format": "decimal"}
+            else:
+                prop = {}
+
+            if col.nullable:
+                prop = {"anyOf": [prop, {"type": "null"}]}
+
+            properties[col_name] = prop
+
+            is_required = (
+                not col.nullable
+                and col.default is None
+                and not getattr(col, "auto_increment", False)
+                and not getattr(col, "auto_now_add", False)
+            )
+            if is_required:
+                required.append(col_name)
+
+        result: dict[str, Any] = {
+            "type": "object",
+            "title": cls.__name__,
+            "properties": properties,
+        }
+        if required:
+            result["required"] = required
+        return result
 
     # ── カスタム例外 ──────────────────────────────────────────
     class NotFound(Exception):

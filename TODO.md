@@ -71,6 +71,7 @@
 - [x] `has_one` 逆参照が `list` を返すバグを修正 (`Model | None` を返すように)
 - [x] `StrColumn.ddl_fragment()` が `sql_type` を破壊的に書き換えるバグを修正
 - [x] DDL 型変換 (`SERIAL→AUTOINCREMENT` 等) を `_adapt_ddl()` に一元化
+- [x] Pydantic v2 プロトコル対応 (`model_dump` / `model_validate` / `__get_pydantic_core_schema__` / `__get_pydantic_json_schema__`) — FastAPI の `response_model` に直接指定可能
 
 #### 低優先
 

@@ -6,11 +6,12 @@ Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `p
 
 - **完全非同期** — `async/await` ベースの API。`asyncio` と自然に統合
 - **型安全なクエリ** — `User.age >= 20` のような演算子オーバーロードで文字列なしにクエリを構築
-- **複数 DB 対応** — PostgreSQL (asyncpg / psycopg3) と SQLite (aiosqlite) をサポート
+- **複数 DB 対応** — PostgreSQL (asyncpg / psycopg3)・SQLite (aiosqlite)・MySQL/MariaDB (aiomysql) をサポート
 - **自動マイグレーション** — モデルと DB スキーマの差分を検出して ALTER TABLE を生成
 - **Generic デスクリプタ** — `Column[T]` による型アノテーション推論。IDE の補完が正しく動作
 - **イベントフック** — `before_insert` / `after_update` などを Model に定義するだけで動作
 - **リレーション定義** — `has_many()` / `has_one()` / `belongs_to()` で FK ナビゲーション（前向き・逆参照）を宣言的に記述
+- **Pydantic v2 統合** — `__get_pydantic_core_schema__` / `__get_pydantic_json_schema__` を実装。FastAPI の `response_model` に KakaORM モデルを直接指定できる
 
 ## インストール
 
@@ -477,21 +478,29 @@ async with await kakaorm.connect("sqlite+aiosqlite:///:memory:") as engine:
 
 ## FastAPI との連携
 
-`examples/fastapi_todo.py` に TODO リスト API のサンプルがあります。
+Pydantic v2 プロトコルを実装しているため、KakaORM モデルを `response_model` に直接指定できます。
+レスポンス用の `BaseModel` サブクラスを別途定義する必要はありません。
 
 ```python
 from contextlib import asynccontextmanager
 import kakaorm
 from kakaorm import Model, StrColumn, BoolColumn
 from kakaorm.migration import Migrator
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel  # リクエストボディ用のみ
 
 class Todo(Model):
-    title     = StrColumn(nullable=False)
-    completed = BoolColumn(nullable=False, default=False)
+    title       = StrColumn(nullable=False)
+    description = StrColumn(nullable=True)
+    completed   = BoolColumn(nullable=False, default=False)
 
     class Meta:
         table_name = "todo"
+
+# リクエストボディ用スキーマ（入力バリデーション）
+class TodoCreate(BaseModel):
+    title: str
+    description: str | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -504,16 +513,46 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-@app.get("/todos")
+# response_model に KakaORM モデルを直接指定
+@app.get("/todos", response_model=list[Todo])
 async def list_todos():
-    return [t.to_dict() for t in await Todo.all()]
+    return await Todo.all()
+
+@app.post("/todos", response_model=Todo, status_code=201)
+async def create_todo(body: TodoCreate):
+    return await Todo.create(**body.model_dump())
+
+@app.get("/todos/{todo_id}", response_model=Todo)
+async def get_todo(todo_id: int):
+    todo = await Todo.get_or_none(Todo.id == todo_id)
+    if todo is None:
+        raise HTTPException(status_code=404, detail="Todo not found")
+    return todo
 ```
+
+Swagger UI (`/docs`) には `id` / `title` / `description` / `completed` の型情報が自動出力されます。
 
 起動:
 
 ```bash
+pip install fastapi uvicorn aiosqlite
 python examples/fastapi_todo.py
 # http://localhost:8000/docs で Swagger UI を確認
+```
+
+### Pydantic 互換メソッド
+
+```python
+# Pydantic 互換のシリアライズ
+user.model_dump()
+# → {"id": 1, "name": "Alice", "age": 30, "bio": None}
+
+user.model_dump(exclude_none=True, exclude={"bio"})
+# → {"id": 1, "name": "Alice", "age": 30}
+
+# Pydantic 互換の変換
+user = User.model_validate({"name": "Alice", "age": 30})   # dict から
+user = User.model_validate(other_instance)                  # 別インスタンスから
 ```
 
 ## セキュリティ
@@ -586,3 +625,4 @@ pytest
 
 - Python 3.11 以上
 - 接続するデータベースに応じたドライバ (`aiosqlite` / `asyncpg` / `psycopg[binary]` / `aiomysql`)
+- Pydantic v2 統合を使う場合: `pip install pydantic`（省略可能 — 未インストールでも ORM 本体は動作する）

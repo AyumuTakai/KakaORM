@@ -29,7 +29,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from kakaorm import BoolColumn, Model, StrColumn
 from kakaorm.migration import Migrator
-from pydantic import BaseModel
+from pydantic import BaseModel  # リクエストボディ用スキーマにのみ使用
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
@@ -45,7 +45,9 @@ class Todo(Model):
         table_name = "todo"
 
 
-# ── Pydantic スキーマ ─────────────────────────────────────────
+# ── リクエストボディ用 Pydantic スキーマ ─────────────────────
+# レスポンスには Todo モデルをそのまま使用するため、
+# リクエスト（入力バリデーション）用のスキーマのみ定義する。
 
 class TodoCreate(BaseModel):
     title: str
@@ -56,15 +58,6 @@ class TodoUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
     completed: bool | None = None
-
-
-class TodoResponse(BaseModel):
-    id: int
-    title: str
-    description: str | None
-    completed: bool
-
-    model_config = {"from_attributes": True}
 
 
 # ── アプリケーション ──────────────────────────────────────────
@@ -91,30 +84,28 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 async def index():
     return FileResponse(os.path.join(STATIC_DIR, "index.html"))
 
-@app.get("/todos", response_model=list[TodoResponse])
+@app.get("/todos", response_model=list[Todo])
 async def list_todos():
     """全 TODO を取得する。"""
-    todos = await Todo.all()
-    return [TodoResponse.model_validate(t.to_dict()) for t in todos]
+    return await Todo.all()
 
 
-@app.post("/todos", response_model=TodoResponse, status_code=201)
+@app.post("/todos", response_model=Todo, status_code=201)
 async def create_todo(body: TodoCreate):
     """新しい TODO を作成する。"""
-    todo = await Todo.create(**body.model_dump())
-    return TodoResponse.model_validate(todo.to_dict())
+    return await Todo.create(**body.model_dump())
 
 
-@app.get("/todos/{todo_id}", response_model=TodoResponse)
+@app.get("/todos/{todo_id}", response_model=Todo)
 async def get_todo(todo_id: int):
     """指定 ID の TODO を取得する。"""
     todo = await Todo.get_or_none(Todo.id == todo_id)
     if todo is None:
         raise HTTPException(status_code=404, detail="Todo not found")
-    return TodoResponse.model_validate(todo.to_dict())
+    return todo
 
 
-@app.patch("/todos/{todo_id}", response_model=TodoResponse)
+@app.patch("/todos/{todo_id}", response_model=Todo)
 async def update_todo(todo_id: int, body: TodoUpdate):
     """TODO を部分更新する。"""
     todo = await Todo.get_or_none(Todo.id == todo_id)
@@ -123,7 +114,7 @@ async def update_todo(todo_id: int, body: TodoUpdate):
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(todo, field, value)
     await todo.save()
-    return TodoResponse.model_validate(todo.to_dict())
+    return todo
 
 
 @app.delete("/todos/{todo_id}", status_code=204)
