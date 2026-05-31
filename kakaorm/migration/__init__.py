@@ -134,6 +134,12 @@ class Migrator:
                 "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
                 [table_name],
             )
+        elif "MySQL" in engine_type:
+            rows = await self.engine._fetch(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema=DATABASE() AND table_name=%s",
+                [table_name],
+            )
         else:
             rows = await self.engine._fetch(
                 "SELECT table_name FROM information_schema.tables "
@@ -150,6 +156,14 @@ class Migrator:
                 f"PRAGMA table_info({table_name})", []
             )
             return {row["name"]: row["type"] for row in rows}
+        elif "MySQL" in engine_type:
+            rows = await self.engine._fetch(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_name=%s AND table_schema=DATABASE()",
+                [table_name],
+            )
+            # aiomysql は大文字キーを返す場合があるため小文字に統一
+            return {row["column_name"]: row["data_type"] for row in rows}
         else:
             rows = await self.engine._fetch(
                 "SELECT column_name, data_type FROM information_schema.columns "
@@ -169,11 +183,15 @@ class Migrator:
                 ddl = ddl.replace("DOUBLE PRECISION", "REAL")
                 ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "TEXT")
                 ddl = ddl.replace("BOOLEAN", "INTEGER")
+            elif "MySQL" in engine_type:
+                ddl = ddl.replace("SERIAL PRIMARY KEY", "INT AUTO_INCREMENT PRIMARY KEY")
+                ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "DATETIME")
             col_defs.append(f"  {col_name} {ddl}")
+        suffix = " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" if "MySQL" in engine_type else ""
         return (
             f"CREATE TABLE IF NOT EXISTS {meta.table_name} (\n"
             + ",\n".join(col_defs)
-            + "\n)"
+            + f"\n){suffix}"
         )
 
     @staticmethod

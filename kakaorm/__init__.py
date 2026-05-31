@@ -259,6 +259,98 @@ class AioSQLiteEngine(Engine):
         return sql.replace("%s", "?")
 
 
+# ── aiomysql Engine ──────────────────────────────────────────
+
+class AioMySQLEngine(Engine):
+    """MySQL / MariaDB 用 aiomysql ドライバ。コネクションプールを使用。"""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        user: str,
+        password: str,
+        db: str,
+        *,
+        minsize: int = 2,
+        maxsize: int = 10,
+    ) -> None:
+        self._host = host
+        self._port = port
+        self._user = user
+        self._password = password
+        self._db = db
+        self._minsize = minsize
+        self._maxsize = maxsize
+        self._pool: Any = None
+
+    def _param(self, n: int) -> str:
+        return "%s"  # MySQL も %s 形式
+
+    async def connect(self) -> None:
+        import aiomysql  # type: ignore
+        self._pool = await aiomysql.create_pool(
+            host=self._host,
+            port=self._port,
+            user=self._user,
+            password=self._password,
+            db=self._db,
+            minsize=self._minsize,
+            maxsize=self._maxsize,
+            autocommit=True,
+            charset="utf8mb4",
+        )
+
+    async def disconnect(self) -> None:
+        if self._pool:
+            self._pool.close()
+            await self._pool.wait_closed()
+
+    async def _fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        import aiomysql  # type: ignore
+        async with self._pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(sql, params)
+                rows = await cur.fetchall()
+                # aiomysql DictCursor はキーを大文字で返す場合があるため小文字に統一
+                return [{k.lower(): v for k, v in row.items()} for row in rows]
+
+    async def _execute(self, sql: str, params: list[Any]) -> int:
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql, params)
+                return cur.rowcount if cur.rowcount >= 0 else 0
+
+    async def _fetchval(self, sql: str, params: list[Any]) -> Any:
+        """INSERT RETURNING id を MySQL の lastrowid で代替。"""
+        has_returning = "RETURNING" in sql.upper()
+        sql_exec = re.sub(r"\s+RETURNING\s+\w+", "", sql, flags=re.IGNORECASE)
+        async with self._pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(sql_exec, params)
+                if has_returning:
+                    return cur.lastrowid
+                row = await cur.fetchone()
+                return row[0] if row else None
+
+    async def create_table(self, model_cls: Any, *, if_not_exists: bool = True) -> None:
+        """MySQL 用: SERIAL → INT AUTO_INCREMENT、TIMESTAMP WITH TIME ZONE → DATETIME"""
+        meta = model_cls._meta
+        exists = "IF NOT EXISTS " if if_not_exists else ""
+        col_defs = []
+        for col_name, col in meta.columns.items():
+            ddl = col.ddl_fragment()
+            ddl = ddl.replace("SERIAL PRIMARY KEY", "INT AUTO_INCREMENT PRIMARY KEY")
+            ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "DATETIME")
+            col_defs.append(f"  {col_name} {ddl}")
+        sql = (
+            f"CREATE TABLE {exists}{meta.table_name} (\n"
+            + ",\n".join(col_defs)
+            + "\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        )
+        await self._execute(sql, [])
+
+
 # ── Psycopg3 Engine ───────────────────────────────────────────
 
 class Psycopg3Engine(Engine):
@@ -316,6 +408,8 @@ async def connect(url: str, **kwargs: Any) -> Engine:
         postgresql+psycopg3://user:pw@host/db
         sqlite+aiosqlite:///./path/to/db.sqlite
         sqlite+aiosqlite:///:memory:
+        mysql+aiomysql://user:pw@host:3306/db
+        mysql+aiomysql://user:pw@host/db
     """
     from kakaorm.model import Model
 
@@ -335,6 +429,17 @@ async def connect(url: str, **kwargs: Any) -> Engine:
         # sqlite+aiosqlite:///./path → ./path
         path = url.replace("sqlite+aiosqlite:///", "").replace("sqlite:///", "")
         engine = AioSQLiteEngine(path)
+
+    elif "aiomysql" in scheme or scheme.startswith("mysql"):
+        # mysql+aiomysql://user:pw@host:3306/db
+        engine = AioMySQLEngine(
+            host=parsed.hostname or "localhost",
+            port=parsed.port or 3306,
+            user=parsed.username or "",
+            password=parsed.password or "",
+            db=parsed.path.lstrip("/"),
+            **kwargs,
+        )
 
     else:
         raise ValueError(f"Unsupported database URL: {url!r}")
@@ -364,15 +469,37 @@ from kakaorm.columns.types import (  # noqa: E402
     DateTimeColumn,
     ForeignKey,
 )
+from kakaorm.columns.base import (  # noqa: E402
+    AggFunc,
+    Count,
+    Sum,
+    Avg,
+    Max,
+    Min,
+)
 
 __all__ = [
+    # Engine
     "Engine",
+    "AsyncpgEngine",
+    "AioSQLiteEngine",
+    "AioMySQLEngine",
+    "Psycopg3Engine",
     "connect",
+    # Model
     "Model",
+    # Column types
     "IntColumn",
     "StrColumn",
     "FloatColumn",
     "BoolColumn",
     "DateTimeColumn",
     "ForeignKey",
+    # Aggregate functions
+    "AggFunc",
+    "Count",
+    "Sum",
+    "Avg",
+    "Max",
+    "Min",
 ]

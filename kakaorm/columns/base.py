@@ -17,6 +17,116 @@ from typing import Any, Generic, Sequence, TypeVar, overload
 T = TypeVar("T")
 
 
+# ── 集計関数 ──────────────────────────────────────────────────
+
+class AggFunc:
+    """
+    SUM / AVG / MAX / MIN / COUNT などの集計関数式。
+    select() や having() に渡して使う。
+    """
+
+    def __init__(self, func: str, col_expr: str) -> None:
+        self._func = func
+        self._col_expr = col_expr
+        self._alias: str | None = None
+
+    def label(self, alias: str) -> "AggFunc":
+        """AS alias を付ける。"""
+        new = self.__class__.__new__(self.__class__)
+        AggFunc.__init__(new, self._func, self._col_expr)
+        new._alias = alias
+        return new
+
+    def _sql_expr(self) -> str:
+        """SELECT リスト用の SQL 式（エイリアス付き）。"""
+        base = f"{self._func}({self._col_expr})"
+        return f"{base} AS {self._alias}" if self._alias else base
+
+    def _having_expr(self) -> str:
+        """HAVING 句用の SQL 式（エイリアスなし）。"""
+        return f"{self._func}({self._col_expr})"
+
+    def _result_key(self) -> str:
+        return self._alias or self._func.lower()
+
+    @property
+    def asc(self) -> str:
+        return f"{self._having_expr()} ASC"
+
+    @property
+    def desc(self) -> str:
+        return f"{self._having_expr()} DESC"
+
+    # HAVING 条件生成のための比較演算子
+    def __eq__(self, other: Any) -> "WhereClause":       # type: ignore[override]
+        return WhereClause(f"{self._having_expr()} = %s", [other])
+
+    def __ne__(self, other: Any) -> "WhereClause":       # type: ignore[override]
+        return WhereClause(f"{self._having_expr()} != %s", [other])
+
+    def __gt__(self, other: Any) -> "WhereClause":
+        return WhereClause(f"{self._having_expr()} > %s", [other])
+
+    def __ge__(self, other: Any) -> "WhereClause":
+        return WhereClause(f"{self._having_expr()} >= %s", [other])
+
+    def __lt__(self, other: Any) -> "WhereClause":
+        return WhereClause(f"{self._having_expr()} < %s", [other])
+
+    def __le__(self, other: Any) -> "WhereClause":
+        return WhereClause(f"{self._having_expr()} <= %s", [other])
+
+    def __repr__(self) -> str:
+        return f"<{self._func}({self._col_expr})>"
+
+
+def _col_expr(col: Any) -> str:
+    return col._qualified() if hasattr(col, "_qualified") else str(col)
+
+
+class Count(AggFunc):
+    def __init__(self, col: Any = None) -> None:
+        super().__init__("COUNT", _col_expr(col) if col is not None else "*")
+
+
+class Sum(AggFunc):
+    def __init__(self, col: Any) -> None:
+        super().__init__("SUM", _col_expr(col))
+
+
+class Avg(AggFunc):
+    def __init__(self, col: Any) -> None:
+        super().__init__("AVG", _col_expr(col))
+
+
+class Max(AggFunc):
+    def __init__(self, col: Any) -> None:
+        super().__init__("MAX", _col_expr(col))
+
+
+class Min(AggFunc):
+    def __init__(self, col: Any) -> None:
+        super().__init__("MIN", _col_expr(col))
+
+
+# ── JOIN ON 用カラム間比較式 ──────────────────────────────────
+
+@dataclass
+class ColumnCompare:
+    """
+    2つのカラム間の比較式（バインドパラメータなし）。
+    ColumnMeta 同士を == / != で比較したときに生成され、
+    JOIN の ON 句や WHERE 句で使用する。
+    """
+    sql: str
+
+    def __and__(self, other: "ColumnCompare") -> "ColumnCompare":
+        return ColumnCompare(f"({self.sql}) AND ({other.sql})")
+
+    def __or__(self, other: "ColumnCompare") -> "ColumnCompare":
+        return ColumnCompare(f"({self.sql}) OR ({other.sql})")
+
+
 @dataclass
 class WhereClause:
     """SQL WHERE句のフラグメント。複数を AND/OR で結合できる。"""
@@ -62,12 +172,16 @@ class ColumnMeta:
         return self._name
 
     # ── 比較演算子 ────────────────────────────────────────────
-    def __eq__(self, other: Any) -> WhereClause:          # type: ignore[override]
+    def __eq__(self, other: Any) -> "WhereClause | ColumnCompare":   # type: ignore[override]
+        if isinstance(other, ColumnMeta):
+            return ColumnCompare(f"{self._qualified()} = {other._qualified()}")
         if other is None:
             return WhereClause(f"{self._qualified()} IS NULL")
         return WhereClause(f"{self._qualified()} = %s", [other])
 
-    def __ne__(self, other: Any) -> WhereClause:          # type: ignore[override]
+    def __ne__(self, other: Any) -> "WhereClause | ColumnCompare":   # type: ignore[override]
+        if isinstance(other, ColumnMeta):
+            return ColumnCompare(f"{self._qualified()} != {other._qualified()}")
         if other is None:
             return WhereClause(f"{self._qualified()} IS NOT NULL")
         return WhereClause(f"{self._qualified()} != %s", [other])
