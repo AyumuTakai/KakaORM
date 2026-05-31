@@ -639,6 +639,8 @@ pip install -e ".[aiosqlite,dev]"
 pytest
 
 # MySQL テスト (別途 MySQL サーバーが必要)
+# MySQL 8.0 は caching_sha2_password 認証を使うため cryptography が必要
+pip install -e ".[aiomysql,dev]" cryptography
 export KAKAORM_MYSQL_URL="mysql+aiomysql://root:password@localhost:3306/test_db"
 pytest tests/test_mysql.py
 ```

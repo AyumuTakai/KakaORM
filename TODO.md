@@ -87,4 +87,6 @@
 - [x] `CHANGELOG.md` 作成
 - [x] GitHub Actions CI (`.github/workflows/ci.yml`) — lint・テストマトリクス・MySQL・wheel ビルド
 - [x] README にバッジ・ライセンスセクション・インストール手順を追記
+- [x] ruff lint エラー修正 — 未使用 import 削除・`TYPE_CHECKING` ガードで循環 import を回避しつつ前方参照を解決
+- [x] MySQL CI 修正 — MySQL 8.0 の `caching_sha2_password` 認証に必要な `cryptography` パッケージを追加
 - [ ] PyPI への初回アップロード (`twine upload dist/*`)
