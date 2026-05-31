@@ -317,6 +317,17 @@ class Column(Generic[T]):
     def __set__(self, obj: Any, value: T) -> None:
         obj._data[self._name] = value
 
+    # ── 型変換フック ─────────────────────────────────────────
+    # サブクラスでオーバーライドして Python ↔ DB 間の型変換を実装する。
+
+    def from_db(self, value: Any) -> Any:
+        """DB から読み取った値を Python 型に変換する。デフォルトはそのまま。"""
+        return value
+
+    def to_db(self, value: Any) -> Any:
+        """Python 値を DB に書き込む前に変換する。デフォルトはそのまま。"""
+        return value
+
     # ── DDL ──────────────────────────────────────────────────
 
     def ddl_fragment(self) -> str:
