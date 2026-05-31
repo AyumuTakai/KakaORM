@@ -234,11 +234,23 @@ class Engine(ABC):
             sql = f"CREATE INDEX {exists}{idx_name} ON {meta.table_name} ({cols_sql})"
             await self._execute(sql, [])
 
-    async def drop_table(self, model_cls: Any, *, if_exists: bool = True) -> None:
-        """DROP TABLE を実行する。"""
+    async def drop_table(
+        self,
+        model_cls: Any,
+        *,
+        if_exists: bool = True,
+        cascade: bool = False,
+    ) -> None:
+        """
+        DROP TABLE を実行する。
+
+        :param cascade: True のとき ``CASCADE`` を付加し、参照先テーブルも含めて削除する。
+                        PostgreSQL のみ有効。SQLite / MySQL では無視される。
+        """
         meta = model_cls._meta
         exists = "IF EXISTS " if if_exists else ""
-        sql = f"DROP TABLE {exists}{meta.table_name}"
+        cascade_sql = " CASCADE" if cascade else ""
+        sql = f"DROP TABLE {exists}{meta.table_name}{cascade_sql}"
         await self._execute(sql, [])
 
     async def truncate(self, model_cls: Any, *, restart_identity: bool = True) -> None:
@@ -530,6 +542,19 @@ class AioSQLiteEngine(Engine):
         )
         await self._execute(sql, [])
         await self._create_indexes(meta, if_not_exists=if_not_exists)
+
+    async def drop_table(
+        self,
+        model_cls: Any,
+        *,
+        if_exists: bool = True,
+        cascade: bool = False,
+    ) -> None:
+        """SQLite 用: CASCADE は未サポートのため無視する。"""
+        meta = model_cls._meta
+        exists = "IF EXISTS " if if_exists else ""
+        sql = f"DROP TABLE {exists}{meta.table_name}"
+        await self._execute(sql, [])
 
     async def truncate(self, model_cls: Any, *, restart_identity: bool = True) -> None:
         """SQLite 用: DELETE FROM で全行削除し、sqlite_sequence でシーケンスをリセット。"""

@@ -31,7 +31,7 @@
 
 ## DDL 操作
 
-- [ ] DROP TABLE CASCADE オプション
+- [x] DROP TABLE CASCADE オプション
 
 #### 低優先
 
