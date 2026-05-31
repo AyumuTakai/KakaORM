@@ -54,11 +54,23 @@
 - [ ] カラム型変更
 - [ ] 自動生成 (autogenerate)
 
+## セキュリティ
+
+- [x] `update()` カラム名ホワイトリスト検証 (`_meta.columns` に存在しないキーを `ValueError` で拒否)
+- [x] `insert_into()` 宛先カラム名ホワイトリスト検証 (同上)
+- [x] セキュリティ回帰テスト (`test_security.py`) — マスアサインメント / SQLi パラメータ化 / NULL インジェクション / セカンドオーダー等
+- [ ] `order_by()` へのユーザー入力を ORM 側でホワイトリスト検証する仕組み (現状はアプリ側対応が必要)
+
 ## その他
 
 - [x] バルクインサート (高速一括投入)
 - [x] Raw SQL との統合強化
 - [x] イベントフック (before_insert / after_insert / before_update / after_update / before_delete / after_delete)
+- [x] Engine クラスを `engine.py` に分離 (旧: `__init__.py` に混在)
+- [x] `QuerySet` の WHERE / HAVING マージ・エンジン取得を共通ヘルパーに抽出
+- [x] `has_one` 逆参照が `list` を返すバグを修正 (`Model | None` を返すように)
+- [x] `StrColumn.ddl_fragment()` が `sql_type` を破壊的に書き換えるバグを修正
+- [x] DDL 型変換 (`SERIAL→AUTOINCREMENT` 等) を `_adapt_ddl()` に一元化
 
 #### 低優先
 

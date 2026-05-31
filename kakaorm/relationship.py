@@ -7,20 +7,19 @@
 
     class Author(Model):
         name = StrColumn(nullable=False)
-        # 1対多の逆参照
-        posts = has_many("Post", foreign_key="author_id")
+        posts    = has_many("Post",    foreign_key="author_id")
+        profile  = has_one("Profile",  foreign_key="author_id")
 
     class Post(Model):
         author_id = ForeignKey(Author)
-        # 多対1の前向きFK
-        author = belongs_to(Author, foreign_key="author_id")
+        author    = belongs_to(Author, foreign_key="author_id")
 
-    # 使用例
-    post = await Post.get(Post.id == 1)
-    author = await post.author          # → Author | None
+    post   = await Post.get(Post.id == 1)
+    author = await post.author       # → Author | None
 
     author = await Author.get(Author.id == 1)
-    posts  = await author.posts         # → list[Post]
+    posts  = await author.posts      # → list[Post]
+    profile = await author.profile   # → Profile | None
 """
 
 from __future__ import annotations
@@ -40,11 +39,13 @@ class _RelationshipProxy:
         fk_value: Any,
         *,
         many: bool = False,
+        single: bool = False,
         fk_field: str = "",
     ) -> None:
         self._related_model = related_model
         self._fk_value = fk_value
         self._many = many
+        self._single = single   # has_one: True (list ではなく単体を返す)
         self._fk_field = fk_field
 
     def __await__(self):
@@ -54,7 +55,10 @@ class _RelationshipProxy:
         model = self._resolve_model()
         if self._many:
             fk_col = getattr(model, self._fk_field)
-            return await model.where(fk_col == self._fk_value).execute()
+            results = await model.where(fk_col == self._fk_value).execute()
+            if self._single:
+                return results[0] if results else None
+            return results
         else:
             pk_name = model._meta.pk_name
             pk_col = getattr(model, pk_name)
@@ -141,7 +145,7 @@ class has_many(_RelationshipDescriptor):
 
 class has_one(_RelationshipDescriptor):
     """
-    1対1の逆参照リレーション。
+    1対1の逆参照リレーション。関連先モデルのFKで検索し、単体を返す。
 
     :param related_model: 関連先モデルクラス（または文字列でのクラス名）。
     :param foreign_key:   関連先モデルのFKカラム名。
@@ -157,6 +161,14 @@ class has_one(_RelationshipDescriptor):
 
     def __init__(self, related_model: Any, *, foreign_key: str) -> None:
         super().__init__(related_model, foreign_key=foreign_key, many=True)
+
+    def __get__(self, obj: Any, objtype: Any = None) -> Any:
+        if obj is None:
+            return self
+        pk_val = obj._data.get(obj._meta.pk_name)
+        return _RelationshipProxy(
+            self._related_model, pk_val, many=True, single=True, fk_field=self._foreign_key
+        )
 
     def __repr__(self) -> str:
         return f"<has_one {self._related_model!r} fk={self._foreign_key!r}>"

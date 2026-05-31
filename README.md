@@ -516,21 +516,45 @@ python examples/fastapi_todo.py
 # http://localhost:8000/docs で Swagger UI を確認
 ```
 
+## セキュリティ
+
+kakaorm はクエリの値を常にバインドパラメータとして扱い、SQL インジェクションを防止します。
+
+- **WHERE / LIKE / IN 句の値** — すべてバインドパラメータ経由で送出されます
+- **`update()` のカラム名** — `_meta.columns` に存在しないキーは `ValueError` で拒否します
+- **`insert_into()` の宛先カラム名** — 同様に `_meta.columns` でホワイトリスト検証します
+- **`create()` のフィールド名** — 未知のフィールドは `TypeError` で拒否します
+
+> **アプリ側の注意点**
+>
+> `order_by()` は生文字列をそのまま SQL に展開します。
+> ユーザー入力を ORDER BY に使う場合は、許可済みカラム名のみを受け付けるホワイトリストをアプリ側で実装してください。
+>
+> ```python
+> ALLOWED = {"views", "title", "created_at"}
+> col = user_input if user_input in ALLOWED else "id"
+> results = await Post.all().order_by(f"{col} DESC")
+> ```
+>
+> また、`create()` / `save()` は既知フィールドへの書き込みを制限しません。
+> ユーザー入力から特権フィールド（`is_admin` など）を除外する処理はアプリ層で行ってください。
+
 ## プロジェクト構成
 
 ```
 kakaorm/
 ├── kakaorm/                 # パッケージ本体
-│   ├── __init__.py          # Engine (AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine), connect()
+│   ├── __init__.py          # 公開 API の再エクスポート
+│   ├── engine.py            # Engine 基底クラス + AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine, connect()
 │   ├── model.py             # Model 基底クラス, AsyncORMMeta メタクラス
 │   ├── query.py             # QuerySet (遅延クエリビルダ)
-│   ├── relationship.py      # relationship() デスクリプタ
+│   ├── relationship.py      # has_many / has_one / belongs_to デスクリプタ
 │   ├── columns/
 │   │   ├── base.py          # Column[T] 基底クラス, ColumnMeta, WhereClause
 │   │   └── types.py         # IntColumn, StrColumn, FloatColumn, BoolColumn,
 │   │                        # DateTimeColumn, DateColumn, TimeColumn, DecimalColumn, ForeignKey
 │   └── migration/
-│       └── __init__.py      # Migrator, MigrationPlan
+│       └── __init__.py      # Migrator, VersionedMigrator, MigrationPlan
 ├── examples/
 │   ├── blog_example.py      # ブログシステムの使用例
 │   └── fastapi_todo.py      # FastAPI TODO リスト API
@@ -546,7 +570,8 @@ kakaorm/
 │   ├── test_indexes.py      # 複合インデックス
 │   ├── test_custom_pk.py    # ユーザー定義主キー
 │   ├── test_hooks.py        # イベントフック
-│   └── test_relationship.py # リレーション定義
+│   ├── test_relationship.py # リレーション定義
+│   └── test_security.py     # セキュリティ回帰テスト
 └── ruff.toml                # Ruff 設定
 ```
 

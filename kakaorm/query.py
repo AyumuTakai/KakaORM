@@ -71,7 +71,7 @@ class QuerySet(Generic[T]):
         self._order_by: list[str] = []
         self._limit_val: int | None = None
         self._offset_val: int | None = None
-        self._select_cols: list[tuple[str, list[Any]]] | None = None  # (sql_expr, params) のリスト。None = SELECT *
+        self._select_cols: list[tuple[str, list[Any]]] | None = None  # None = SELECT *
         self._group_by: list[str] = []
         self._having: list[WhereClause] = []
         self._joins: list[JoinClause] = []
@@ -87,6 +87,24 @@ class QuerySet(Generic[T]):
         new._having      = list(self._having)
         new._joins       = list(self._joins)
         return new
+
+    @property
+    def _engine(self) -> Any:
+        """接続済み Engine を返す。未接続なら RuntimeError。"""
+        engine = self._model._engine
+        if engine is None:
+            raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
+        return engine
+
+    @staticmethod
+    def _merge_clauses(clauses: list[WhereClause], keyword: str) -> tuple[str, list[Any]]:
+        """複数の WhereClause を AND で結合し `KEYWORD sql` 形式で返す。句がなければ空文字列。"""
+        if not clauses:
+            return "", []
+        merged = clauses[0]
+        for clause in clauses[1:]:
+            merged = merged & clause
+        return f" {keyword} {merged.sql}", list(merged.params)
 
     # ── クエリ条件の積み上げ ──────────────────────────────────
 
@@ -215,31 +233,21 @@ class QuerySet(Generic[T]):
             join_table = j.model._meta.table_name
             sql += f" {j.join_type} JOIN {join_table} ON {j.on_sql}"
 
-        # WHERE 句
-        if self._where:
-            merged = self._where[0]
-            for clause in self._where[1:]:
-                merged = merged & clause
-            sql += f" WHERE {merged.sql}"
-            params.extend(merged.params)
+        # WHERE / GROUP BY / HAVING / ORDER BY / LIMIT / OFFSET
+        where_sql, where_params = self._merge_clauses(self._where, "WHERE")
+        sql += where_sql
+        params.extend(where_params)
 
-        # GROUP BY 句
         if self._group_by:
             sql += " GROUP BY " + ", ".join(self._group_by)
 
-        # HAVING 句
-        if self._having:
-            merged_h = self._having[0]
-            for clause in self._having[1:]:
-                merged_h = merged_h & clause
-            sql += f" HAVING {merged_h.sql}"
-            params.extend(merged_h.params)
+        having_sql, having_params = self._merge_clauses(self._having, "HAVING")
+        sql += having_sql
+        params.extend(having_params)
 
-        # ORDER BY 句
         if self._order_by:
             sql += " ORDER BY " + ", ".join(self._order_by)
 
-        # LIMIT / OFFSET
         # SQLite は OFFSET 単独を許可しないため、LIMIT なしの場合は LIMIT -1 を付与する
         if self._limit_val is not None:
             sql += f" LIMIT {self._limit_val}"
@@ -269,7 +277,7 @@ class QuerySet(Generic[T]):
             for k, v in row.items()
         }
         instance = self._model(**converted)
-        instance._is_new = False  # DB 取得済みインスタンスは UPDATE パスを使う
+        instance._is_new = False
         return instance
 
     async def execute(self) -> list[Any]:
@@ -278,30 +286,18 @@ class QuerySet(Generic[T]):
         - JOIN / GROUP BY / 集計なし → list[Model]
         - JOIN / GROUP BY / 集計あり → list[dict]
         """
-        engine = self._model._engine
-        if engine is None:
-            raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
         sql, params = self._build_sql()
-        rows = await engine._fetch(sql, params)
+        rows = await self._engine._fetch(sql, params)
         if self._returns_raw:
             return list(rows)
         return [self._hydrate(row) for row in rows]
 
     async def count(self) -> int:
         """COUNT(*) を実行して件数を返す。"""
-        engine = self._model._engine
-        if engine is None:
-            raise RuntimeError("No engine connected.")
         table = self._model._meta.table_name
-        sql = f"SELECT COUNT(*) AS cnt FROM {table}"
-        params: list[Any] = []
-        if self._where:
-            merged = self._where[0]
-            for clause in self._where[1:]:
-                merged = merged & clause
-            sql += f" WHERE {merged.sql}"
-            params.extend(merged.params)
-        rows = await engine._fetch(sql, params)
+        where_sql, params = self._merge_clauses(self._where, "WHERE")
+        sql = f"SELECT COUNT(*) AS cnt FROM {table}{where_sql}"
+        rows = await self._engine._fetch(sql, params)
         return rows[0]["cnt"] if rows else 0
 
     async def aggregate(self, **agg_exprs: AggFunc) -> dict[str, Any]:
@@ -314,23 +310,14 @@ class QuerySet(Generic[T]):
                 avg=Avg(Post.score),
             )
         """
-        engine = self._model._engine
-        if engine is None:
-            raise RuntimeError("No engine connected.")
         table = self._model._meta.table_name
         select_parts = [
             f"{agg._having_expr()} AS {alias}"
             for alias, agg in agg_exprs.items()
         ]
-        sql = f"SELECT {', '.join(select_parts)} FROM {table}"
-        params: list[Any] = []
-        if self._where:
-            merged = self._where[0]
-            for clause in self._where[1:]:
-                merged = merged & clause
-            sql += f" WHERE {merged.sql}"
-            params.extend(merged.params)
-        rows = await engine._fetch(sql, params)
+        where_sql, params = self._merge_clauses(self._where, "WHERE")
+        sql = f"SELECT {', '.join(select_parts)} FROM {table}{where_sql}"
+        rows = await self._engine._fetch(sql, params)
         return dict(rows[0]) if rows else {alias: None for alias in agg_exprs}
 
     async def sum(self, col: Any) -> Any:
@@ -370,19 +357,10 @@ class QuerySet(Generic[T]):
 
     async def delete(self) -> int:
         """条件に一致するレコードを一括 DELETE し削除件数を返す。"""
-        engine = self._model._engine
-        if engine is None:
-            raise RuntimeError("No engine connected.")
         table = self._model._meta.table_name
-        sql = f"DELETE FROM {table}"
-        params: list[Any] = []
-        if self._where:
-            merged = self._where[0]
-            for clause in self._where[1:]:
-                merged = merged & clause
-            sql += f" WHERE {merged.sql}"
-            params.extend(merged.params)
-        return await engine._execute(sql, params)
+        where_sql, params = self._merge_clauses(self._where, "WHERE")
+        sql = f"DELETE FROM {table}{where_sql}"
+        return await self._engine._execute(sql, params)
 
     async def update(self, **values: Any) -> int:
         """
@@ -393,19 +371,15 @@ class QuerySet(Generic[T]):
 
         例::
 
-            # 固定値（従来通り）
             await Post.where(...).update(published=True)
-
-            # 列参照を含む式
             await Product.all().update(price=Product.price * 0.97)
-            await Employee.where(...).update(
-                height=Employee.height + 5,
-                weight=Employee.weight - 2,
-            )
         """
-        engine = self._model._engine
-        if engine is None:
-            raise RuntimeError("No engine connected.")
+        known_columns = self._model._meta.columns
+        unknown = set(values) - set(known_columns)
+        if unknown:
+            raise ValueError(
+                f"Unknown column(s) for {self._model.__name__}: {unknown!r}"
+            )
         table = self._model._meta.table_name
         set_parts: list[str] = []
         params: list[Any] = []
@@ -420,14 +394,10 @@ class QuerySet(Generic[T]):
             else:
                 set_parts.append(f"{k} = %s")
                 params.append(v)
-        sql = f"UPDATE {table} SET {', '.join(set_parts)}"
-        if self._where:
-            merged = self._where[0]
-            for clause in self._where[1:]:
-                merged = merged & clause
-            sql += f" WHERE {merged.sql}"
-            params.extend(merged.params)
-        return await engine._execute(sql, params)
+        where_sql, where_params = self._merge_clauses(self._where, "WHERE")
+        sql = f"UPDATE {table} SET {', '.join(set_parts)}{where_sql}"
+        params.extend(where_params)
+        return await self._engine._execute(sql, params)
 
     async def insert_into(self, dest_model: Any, **mapping: Any) -> int:
         """
@@ -443,8 +413,8 @@ class QuerySet(Generic[T]):
             await (
                 Employee.where(Employee.hire_fiscal_year <= 1993)
                     .insert_into(Salary,
-                        emp_id=Employee.id,   # ColumnMeta
-                        amount=20000,          # リテラル
+                        emp_id=Employee.id,
+                        amount=20000,
                     )
             )
             # INSERT INTO salary (emp_id, amount)
@@ -453,9 +423,12 @@ class QuerySet(Generic[T]):
 
         戻り値: 挿入した行数
         """
-        engine = self._model._engine
-        if engine is None:
-            raise RuntimeError("No engine connected.")
+        known_columns = dest_model._meta.columns
+        unknown = set(mapping) - set(known_columns)
+        if unknown:
+            raise ValueError(
+                f"Unknown column(s) for {dest_model.__name__}: {unknown!r}"
+            )
 
         dest_table = dest_model._meta.table_name
         src_table = self._model._meta.table_name
@@ -466,7 +439,7 @@ class QuerySet(Generic[T]):
 
         for col_name, value in mapping.items():
             dest_cols.append(col_name)
-            if hasattr(value, "_qualified"):  # ColumnMeta
+            if hasattr(value, "_qualified"):
                 select_exprs.append(value._qualified())
             else:
                 select_exprs.append("%s")
@@ -476,33 +449,23 @@ class QuerySet(Generic[T]):
             f"INSERT INTO {dest_table} ({', '.join(dest_cols)})"
             f" SELECT {', '.join(select_exprs)} FROM {src_table}"
         )
-        # リテラルパラメータが SELECT 句、WHERE 句パラメータがその後に続く
         params: list[Any] = list(literal_params)
 
-        # JOIN 句
         for j in self._joins:
             join_table = j.model._meta.table_name
             sql += f" {j.join_type} JOIN {join_table} ON {j.on_sql}"
 
-        # WHERE 句
-        if self._where:
-            merged = self._where[0]
-            for clause in self._where[1:]:
-                merged = merged & clause
-            sql += f" WHERE {merged.sql}"
-            params.extend(merged.params)
+        where_sql, where_params = self._merge_clauses(self._where, "WHERE")
+        sql += where_sql
+        params.extend(where_params)
 
-        # GROUP BY / HAVING
         if self._group_by:
             sql += " GROUP BY " + ", ".join(self._group_by)
-        if self._having:
-            merged_h = self._having[0]
-            for clause in self._having[1:]:
-                merged_h = merged_h & clause
-            sql += f" HAVING {merged_h.sql}"
-            params.extend(merged_h.params)
 
-        # ORDER BY / LIMIT / OFFSET
+        having_sql, having_params = self._merge_clauses(self._having, "HAVING")
+        sql += having_sql
+        params.extend(having_params)
+
         if self._order_by:
             sql += " ORDER BY " + ", ".join(self._order_by)
         if self._limit_val is not None:
@@ -512,7 +475,7 @@ class QuerySet(Generic[T]):
         if self._offset_val is not None:
             sql += f" OFFSET {self._offset_val}"
 
-        return await engine._execute(sql, params)
+        return await self._engine._execute(sql, params)
 
     # ── Python 組み込みプロトコル ─────────────────────────────
 

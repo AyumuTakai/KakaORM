@@ -34,11 +34,8 @@ class StrColumn(Column[str]):
     def __init__(self, *, max_length: int | None = None, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.max_length = max_length
-
-    def ddl_fragment(self) -> str:
-        if self.max_length:
-            self.sql_type = f"VARCHAR({self.max_length})"
-        return super().ddl_fragment()
+        if max_length:
+            self.sql_type = f"VARCHAR({max_length})"
 
 
 class FloatColumn(Column[float]):

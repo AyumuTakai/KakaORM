@@ -175,24 +175,15 @@ class Migrator:
 
     def _build_create_table(self, model_cls: Any) -> str:
         meta = model_cls._meta
-        col_defs = []
-        engine_type = type(self.engine).__name__
-        for col_name, col in meta.columns.items():
-            ddl = col.ddl_fragment()
-            if "SQLite" in engine_type:
-                ddl = ddl.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
-                ddl = ddl.replace("DOUBLE PRECISION", "REAL")
-                ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "TEXT")
-                ddl = ddl.replace("BOOLEAN", "INTEGER")
-            elif "MySQL" in engine_type:
-                ddl = ddl.replace("SERIAL PRIMARY KEY", "INT AUTO_INCREMENT PRIMARY KEY")
-                ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "DATETIME")
-            col_defs.append(f"  {col_name} {ddl}")
-        suffix = " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4" if "MySQL" in engine_type else ""
+        col_defs = [
+            f"  {col_name} {self.engine._adapt_ddl(col.ddl_fragment())}"
+            for col_name, col in meta.columns.items()
+        ]
+        col_defs = self.engine._post_process_col_defs(col_defs)
         return (
             f"CREATE TABLE IF NOT EXISTS {meta.table_name} (\n"
             + ",\n".join(col_defs)
-            + f"\n){suffix}"
+            + f"\n){self.engine._table_suffix}"
         )
 
     @staticmethod
