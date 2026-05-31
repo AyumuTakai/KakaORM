@@ -1,6 +1,6 @@
 # KakaORM
 
-Python 向けの非同期ネイティブ ORM です。`asyncpg` / `psycopg3` / `aiosqlite` をバックエンドとして使用でき、Django ORM ライクなモデル定義と型安全なクエリ構築を提供します。
+Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `psycopg3`)、SQLite (`aiosqlite`)、MySQL/MariaDB (`aiomysql`) をバックエンドとして使用でき、Django ORM ライクなモデル定義と型安全なクエリ構築を提供します。
 
 ## 特徴
 
