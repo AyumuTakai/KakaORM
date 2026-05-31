@@ -57,7 +57,7 @@
 ## その他
 
 - [ ] バルクインサート (高速一括投入)
-- [ ] Raw SQL との統合強化
+- [x] Raw SQL との統合強化
 - [ ] イベントフック (before_insert / after_update 等)
 
 #### 低優先

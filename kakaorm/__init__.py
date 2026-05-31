@@ -83,6 +83,57 @@ class Engine(ABC):
         raise NotImplementedError(f"{type(self).__name__} は transaction() を実装していません")
         yield  # asynccontextmanager として認識させるために必要
 
+    # ── Raw SQL 公開 API ─────────────────────────────────────
+
+    async def fetch(
+        self, sql: str, params: list[Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """
+        Raw SQL で SELECT を実行し、行を dict のリストで返す。
+
+        プレースホルダーは ``%s`` を使用する（内部で DB 方言に変換）。
+
+        例::
+
+            rows = await engine.fetch(
+                "SELECT p.title, a.name FROM post p"
+                " JOIN author a ON p.author_id = a.id"
+                " WHERE p.views > %s",
+                [100],
+            )
+        """
+        return await self._fetch(sql, params or [])
+
+    async def execute(self, sql: str, params: list[Any] | None = None) -> int:
+        """
+        Raw SQL で INSERT / UPDATE / DELETE を実行し、影響行数を返す。
+
+        例::
+
+            affected = await engine.execute(
+                "UPDATE post SET views = 0 WHERE author_id = %s",
+                [author_id],
+            )
+        """
+        return await self._execute(sql, params or [])
+
+    async def fetchval(self, sql: str, params: list[Any] | None = None) -> Any:
+        """
+        Raw SQL でスカラー値を 1 つ返す。COUNT / MAX / MIN などに使う。
+
+        例::
+
+            count = await engine.fetchval(
+                "SELECT COUNT(*) FROM post WHERE published = %s",
+                [True],
+            )
+        """
+        rows = await self._fetch(sql, params or [])
+        if not rows:
+            return None
+        # 最初の行の最初のカラム値を返す
+        return next(iter(rows[0].values()))
+
     # ── ORM 内部から呼ばれる操作 ─────────────────────────────
 
     async def _insert(self, instance: Any) -> None:
