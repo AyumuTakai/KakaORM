@@ -6,7 +6,7 @@
 
 #### 低優先
 
-- [ ] サブクエリ / 派生テーブル (UPDATE / DELETE の WHERE 句でも必要)
+- [x] サブクエリ (WHERE col IN/NOT IN (SELECT ...) 対応)
 - [ ] CASE WHEN 式 (UPDATE の SET 句での条件分岐)
 - [ ] SQL 文字列関数 (REPLACE / CONCAT / SUBSTR 等)
 - [ ] ウィンドウ関数

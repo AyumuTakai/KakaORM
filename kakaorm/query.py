@@ -496,3 +496,30 @@ class QuerySet(Generic[T]):
     def __repr__(self) -> str:
         sql, params = self._build_sql()
         return f"<QuerySet {sql!r} params={params}>"
+
+
+class Subquery:
+    """
+    QuerySet をサブクエリとして WHERE 句に埋め込むラッパー。
+
+    ``in_()`` / ``not_in()`` や比較演算子にそのまま渡せる。
+
+    例::
+
+        # WHERE author_id IN (SELECT id FROM author WHERE name = %s)
+        active_authors = Author.filter(Author.is_active == True).select(Author.id)
+        posts = await Post.filter(Post.author_id.in_(Subquery(active_authors)))
+
+        # QuerySet を直接渡しても同じ動作をする
+        posts = await Post.filter(Post.author_id.in_(active_authors))
+    """
+
+    def __init__(self, queryset: QuerySet) -> None:
+        self._queryset = queryset
+
+    def _build_sql(self) -> tuple[str, list[Any]]:
+        return self._queryset._build_sql()
+
+    def __repr__(self) -> str:
+        sql, params = self._build_sql()
+        return f"<Subquery {sql!r} params={params}>"

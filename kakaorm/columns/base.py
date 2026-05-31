@@ -225,11 +225,18 @@ class ColumnMeta:
     def ilike(self, pattern: str) -> WhereClause:
         return WhereClause(f"{self._qualified()} ILIKE %s", [pattern])
 
-    def in_(self, values: Sequence[Any]) -> WhereClause:
+    def in_(self, values: "Sequence[Any] | Any") -> WhereClause:
+        # サブクエリ対応: _build_sql() を持つオブジェクト (QuerySet / Subquery) を受け付ける
+        if hasattr(values, "_build_sql"):
+            sub_sql, sub_params = values._build_sql()
+            return WhereClause(f"{self._qualified()} IN ({sub_sql})", sub_params)
         placeholders = ", ".join(["%s"] * len(values))
         return WhereClause(f"{self._qualified()} IN ({placeholders})", [self._to_db(v) for v in values])
 
-    def not_in(self, values: Sequence[Any]) -> WhereClause:
+    def not_in(self, values: "Sequence[Any] | Any") -> WhereClause:
+        if hasattr(values, "_build_sql"):
+            sub_sql, sub_params = values._build_sql()
+            return WhereClause(f"{self._qualified()} NOT IN ({sub_sql})", sub_params)
         placeholders = ", ".join(["%s"] * len(values))
         return WhereClause(f"{self._qualified()} NOT IN ({placeholders})", [self._to_db(v) for v in values])
 

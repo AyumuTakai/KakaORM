@@ -865,6 +865,7 @@ from kakaorm.columns.base import (  # noqa: E402
     Min,
 )
 from kakaorm.relationship import relationship  # noqa: E402
+from kakaorm.query import Subquery  # noqa: E402
 
 __all__ = [
     # Engine
@@ -888,6 +889,8 @@ __all__ = [
     "TimeColumn",
     # Relationships
     "relationship",
+    # Subquery
+    "Subquery",
     # Aggregate functions
     "AggFunc",
     "Count",
