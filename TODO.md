@@ -77,3 +77,14 @@
 
 - [ ] 既存 DB からのスキーマ反映
 - [ ] Oracle / MSSQL サポート
+
+## パッケージング・公開
+
+- [x] `pyproject.toml` にパッケージメタデータ記述 (名前・バージョン・依存・optional-deps・URL)
+- [x] MIT ライセンス (`LICENSE`)
+- [x] `__version__` 定義 (`kakaorm/__init__.py`)
+- [x] PEP 561 型情報マーカー (`kakaorm/py.typed`)
+- [x] `CHANGELOG.md` 作成
+- [x] GitHub Actions CI (`.github/workflows/ci.yml`) — lint・テストマトリクス・MySQL・wheel ビルド
+- [x] README にバッジ・ライセンスセクション・インストール手順を追記
+- [ ] PyPI への初回アップロード (`twine upload dist/*`)

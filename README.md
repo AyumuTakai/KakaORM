@@ -1,5 +1,10 @@
 # KakaORM
 
+[![CI](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml/badge.svg)](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/kakaorm.svg)](https://pypi.org/project/kakaorm/)
+[![Python](https://img.shields.io/pypi/pyversions/kakaorm.svg)](https://pypi.org/project/kakaorm/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `psycopg3`)、SQLite (`aiosqlite`)、MySQL/MariaDB (`aiomysql`) をバックエンドとして使用でき、Django ORM ライクなモデル定義と型安全なクエリ構築を提供します。
 
 ## 特徴
@@ -17,13 +22,19 @@ Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `p
 
 ```bash
 # SQLite (開発・テスト向け)
-pip install aiosqlite
+pip install kakaorm[aiosqlite]
 
 # PostgreSQL (asyncpg)
-pip install asyncpg
+pip install kakaorm[asyncpg]
 
 # PostgreSQL (psycopg3)
-pip install psycopg[binary] psycopg-pool
+pip install kakaorm[psycopg3]
+
+# MySQL / MariaDB
+pip install kakaorm[aiomysql]
+
+# 全ドライバ
+pip install kakaorm[all]
 ```
 
 ## クイックスタート
@@ -582,8 +593,12 @@ kakaorm はクエリの値を常にバインドパラメータとして扱い、
 
 ```
 kakaorm/
+├── .github/
+│   └── workflows/
+│       └── ci.yml           # GitHub Actions CI (lint + test matrix + MySQL + build)
 ├── kakaorm/                 # パッケージ本体
 │   ├── __init__.py          # 公開 API の再エクスポート
+│   ├── py.typed             # PEP 561 型情報マーカー
 │   ├── engine.py            # Engine 基底クラス + AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine, connect()
 │   ├── model.py             # Model 基底クラス, AsyncORMMeta メタクラス
 │   ├── query.py             # QuerySet (遅延クエリビルダ)
@@ -611,14 +626,21 @@ kakaorm/
 │   ├── test_hooks.py        # イベントフック
 │   ├── test_relationship.py # リレーション定義
 │   └── test_security.py     # セキュリティ回帰テスト
+├── CHANGELOG.md             # バージョン履歴
+├── LICENSE                  # MIT License
+├── pyproject.toml           # パッケージメタデータ・ビルド設定
 └── ruff.toml                # Ruff 設定
 ```
 
 ## テスト実行
 
 ```bash
-pip install aiosqlite pytest pytest-asyncio
+pip install -e ".[aiosqlite,dev]"
 pytest
+
+# MySQL テスト (別途 MySQL サーバーが必要)
+export KAKAORM_MYSQL_URL="mysql+aiomysql://root:password@localhost:3306/test_db"
+pytest tests/test_mysql.py
 ```
 
 ## 動作要件
@@ -626,3 +648,7 @@ pytest
 - Python 3.11 以上
 - 接続するデータベースに応じたドライバ (`aiosqlite` / `asyncpg` / `psycopg[binary]` / `aiomysql`)
 - Pydantic v2 統合を使う場合: `pip install pydantic`（省略可能 — 未インストールでも ORM 本体は動作する）
+
+## ライセンス
+
+[MIT License](LICENSE)
