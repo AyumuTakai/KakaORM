@@ -1,19 +1,19 @@
 """
-relationship — FK ナビゲーション用デスクリプタ
-===============================================
+リレーション定義 — FK ナビゲーション用デスクリプタ
+====================================================
 モデルクラス上に宣言し、await することで関連オブジェクトをロードする。
 
 使い方::
 
     class Author(Model):
         name = StrColumn(nullable=False)
-        # 逆参照 (1対多)
-        posts = relationship("Post", foreign_key="author_id", reverse=True)
+        # 1対多の逆参照
+        posts = has_many("Post", foreign_key="author_id")
 
     class Post(Model):
         author_id = ForeignKey(Author)
-        # 前向き FK (多対1)
-        author = relationship(Author, foreign_key="author_id")
+        # 多対1の前向きFK
+        author = belongs_to(Author, foreign_key="author_id")
 
     # 使用例
     post = await Post.get(Post.id == 1)
@@ -28,9 +28,9 @@ from __future__ import annotations
 from typing import Any
 
 
-class RelationshipProxy:
+class _RelationshipProxy:
     """
-    relationship デスクリプタがインスタンスアクセス時に返すプロキシ。
+    リレーション用デスクリプタがインスタンスアクセス時に返すプロキシ。
     await するとクエリを実行して関連オブジェクトを返す。
     """
 
@@ -84,27 +84,19 @@ def _all_subclasses(cls: type) -> list[type]:
     return result
 
 
-class relationship:
-    """
-    モデル間リレーションを宣言するデスクリプタ。
-
-    :param related_model: 関連先モデルクラス（または文字列でのクラス名）。
-    :param foreign_key:   FK カラム名。
-                          前向き FK の場合はこのモデルのカラム名。
-                          逆参照の場合は関連先モデルのカラム名。
-    :param reverse:       True のとき 1 対多の逆参照として動作する。
-    """
+class _RelationshipDescriptor:
+    """リレーション定義の基底クラス。"""
 
     def __init__(
         self,
         related_model: Any,
         *,
         foreign_key: str,
-        reverse: bool = False,
+        many: bool = False,
     ) -> None:
         self._related_model = related_model
         self._foreign_key = foreign_key
-        self._reverse = reverse
+        self._many = many
         self._name = ""
 
     def __set_name__(self, owner: Any, name: str) -> None:
@@ -113,18 +105,82 @@ class relationship:
     def __get__(self, obj: Any, objtype: Any = None) -> Any:
         if obj is None:
             return self
-        if self._reverse:
+        if self._many:
             pk_name = obj._meta.pk_name
             pk_val = obj._data.get(pk_name)
-            return RelationshipProxy(
+            return _RelationshipProxy(
                 self._related_model, pk_val, many=True, fk_field=self._foreign_key
             )
         else:
             fk_val = obj._data.get(self._foreign_key)
-            return RelationshipProxy(self._related_model, fk_val)
+            return _RelationshipProxy(self._related_model, fk_val)
+
+
+class has_many(_RelationshipDescriptor):
+    """
+    1対多の逆参照リレーション。
+
+    :param related_model: 関連先モデルクラス（または文字列でのクラス名）。
+    :param foreign_key:   関連先モデルのFKカラム名。
+
+    例::
+
+        class Author(Model):
+            posts = has_many("Post", foreign_key="author_id")
+
+        author = await Author.get(Author.id == 1)
+        posts = await author.posts  # list[Post]
+    """
+
+    def __init__(self, related_model: Any, *, foreign_key: str) -> None:
+        super().__init__(related_model, foreign_key=foreign_key, many=True)
 
     def __repr__(self) -> str:
-        return (
-            f"<relationship {self._related_model!r} "
-            f"fk={self._foreign_key!r} reverse={self._reverse}>"
-        )
+        return f"<has_many {self._related_model!r} fk={self._foreign_key!r}>"
+
+
+class has_one(_RelationshipDescriptor):
+    """
+    1対1の逆参照リレーション。
+
+    :param related_model: 関連先モデルクラス（または文字列でのクラス名）。
+    :param foreign_key:   関連先モデルのFKカラム名。
+
+    例::
+
+        class Author(Model):
+            profile = has_one("Profile", foreign_key="author_id")
+
+        author = await Author.get(Author.id == 1)
+        profile = await author.profile  # Profile | None
+    """
+
+    def __init__(self, related_model: Any, *, foreign_key: str) -> None:
+        super().__init__(related_model, foreign_key=foreign_key, many=True)
+
+    def __repr__(self) -> str:
+        return f"<has_one {self._related_model!r} fk={self._foreign_key!r}>"
+
+
+class belongs_to(_RelationshipDescriptor):
+    """
+    多対1の前向きFKリレーション。
+
+    :param related_model: 関連先モデルクラス（または文字列でのクラス名）。
+    :param foreign_key:   このモデルのFKカラム名。
+
+    例::
+
+        class Post(Model):
+            author_id = ForeignKey(Author)
+            author = belongs_to(Author, foreign_key="author_id")
+
+        post = await Post.get(Post.id == 1)
+        author = await post.author  # Author | None
+    """
+
+    def __init__(self, related_model: Any, *, foreign_key: str) -> None:
+        super().__init__(related_model, foreign_key=foreign_key, many=False)
+
+    def __repr__(self) -> str:
+        return f"<belongs_to {self._related_model!r} fk={self._foreign_key!r}>"

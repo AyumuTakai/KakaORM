@@ -4,15 +4,14 @@
 
 import pytest
 import kakaorm
-from kakaorm import Model, StrColumn, ForeignKey
-from kakaorm.relationship import relationship
+from kakaorm import Model, StrColumn, ForeignKey, has_many, belongs_to
 
 
 class Writer(Model):
     name  = StrColumn(nullable=False)
     email = StrColumn(unique=True, nullable=False)
     # 逆参照: このライターの記事一覧
-    articles = relationship("Article", foreign_key="writer_id", reverse=True)
+    articles = has_many("Article", foreign_key="writer_id")
 
     class Meta:
         table_name = "writer"
@@ -22,7 +21,7 @@ class Article(Model):
     title     = StrColumn(nullable=False)
     writer_id = ForeignKey(Writer, nullable=True)
     # 前向き FK: この記事のライター
-    writer = relationship(Writer, foreign_key="writer_id")
+    writer = belongs_to(Writer, foreign_key="writer_id")
 
     class Meta:
         table_name = "article"
@@ -66,8 +65,8 @@ class TestForwardRelationship:
 
     async def test_class_access_returns_descriptor(self):
         """クラスアクセスではデスクリプタ自体が返ること。"""
-        from kakaorm.relationship import relationship as rel_cls
-        assert isinstance(Article.writer, rel_cls)
+        from kakaorm.relationship import belongs_to as BelongsTo
+        assert isinstance(Article.writer, BelongsTo)
 
 
 class TestReverseRelationship:

@@ -10,7 +10,7 @@ Python 向けの非同期ネイティブ ORM です。`asyncpg` / `psycopg3` / `
 - **自動マイグレーション** — モデルと DB スキーマの差分を検出して ALTER TABLE を生成
 - **Generic デスクリプタ** — `Column[T]` による型アノテーション推論。IDE の補完が正しく動作
 - **イベントフック** — `before_insert` / `after_update` などを Model に定義するだけで動作
-- **リレーション定義** — `relationship()` で FK ナビゲーション（前向き・逆参照）を宣言的に記述
+- **リレーション定義** — `has_many()` / `has_one()` / `belongs_to()` で FK ナビゲーション（前向き・逆参照）を宣言的に記述
 
 ## インストール
 
@@ -250,16 +250,15 @@ class Article(Model):
 
 ## リレーション定義
 
-`relationship()` で FK を通じた関連オブジェクトの取得を宣言的に記述できます。`await` するまでクエリは発行されません。
+`has_many()` / `has_one()` / `belongs_to()` で FK を通じた関連オブジェクトの取得を宣言的に記述できます。`await` するまでクエリは発行されません。
 
 ```python
-from kakaorm import Model, StrColumn, ForeignKey
-from kakaorm.relationship import relationship
+from kakaorm import Model, StrColumn, ForeignKey, has_many, belongs_to
 
 class Author(Model):
     name  = StrColumn(nullable=False)
-    # 逆参照 (1 対多)
-    posts = relationship(Post, foreign_key="author_id", reverse=True)
+    # 1対多の逆参照
+    posts = has_many("Post", foreign_key="author_id")
 
     class Meta:
         table_name = "author"
@@ -267,8 +266,8 @@ class Author(Model):
 class Post(Model):
     title     = StrColumn(nullable=False)
     author_id = ForeignKey(Author, nullable=True)
-    # 前向き FK (多 対 1)
-    author = relationship(Author, foreign_key="author_id")
+    # 多対1の前向き FK
+    author = belongs_to(Author, foreign_key="author_id")
 
     class Meta:
         table_name = "post"
@@ -281,10 +280,18 @@ author = await Author.get(Author.id == 1)
 posts  = await author.posts         # → list[Post]
 ```
 
+### リレーションの種類
+
+| メソッド | 用途 | 戻り値 |
+|----------|------|--------|
+| `has_many()` | 1対多の逆参照 | `list[Model]` |
+| `has_one()` | 1対1の逆参照 | `Model \| None` |
+| `belongs_to()` | 多対1の前向き FK | `Model \| None` |
+
 `related_model` には文字列でクラス名を渡すことも可能です（循環 import 回避）。
 
 ```python
-posts = relationship("Post", foreign_key="author_id", reverse=True)
+posts = has_many("Post", foreign_key="author_id")
 ```
 
 ## QuerySet — クエリビルダ

@@ -866,7 +866,7 @@ from kakaorm.columns.base import (  # noqa: E402
     Min,
     When,
 )
-from kakaorm.relationship import relationship  # noqa: E402
+from kakaorm.relationship import has_many, has_one, belongs_to  # noqa: E402
 from kakaorm.query import Subquery  # noqa: E402
 
 __all__ = [
@@ -890,7 +890,9 @@ __all__ = [
     "DateColumn",
     "TimeColumn",
     # Relationships
-    "relationship",
+    "has_many",
+    "has_one",
+    "belongs_to",
     # Subquery
     "Subquery",
     # Aggregate functions
