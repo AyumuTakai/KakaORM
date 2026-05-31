@@ -241,7 +241,9 @@ class QuerySet(Generic[T]):
             k: columns[k].from_db(v) if k in columns else v
             for k, v in row.items()
         }
-        return self._model(**converted)
+        instance = self._model(**converted)
+        instance._is_new = False  # DB 取得済みインスタンスは UPDATE パスを使う
+        return instance
 
     async def execute(self) -> list[Any]:
         """
@@ -331,7 +333,8 @@ class QuerySet(Generic[T]):
 
     async def last(self) -> T | None:
         """pk 降順で最初の 1 件を返す。"""
-        results = await self.order_by("id DESC").limit(1).execute()
+        pk_name = self._model._meta.pk_name
+        results = await self.order_by(f"{pk_name} DESC").limit(1).execute()
         return results[0] if results else None
 
     async def exists(self) -> bool:

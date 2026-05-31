@@ -9,6 +9,8 @@ Python 向けの非同期ネイティブ ORM です。`asyncpg` / `psycopg3` / `
 - **複数 DB 対応** — PostgreSQL (asyncpg / psycopg3) と SQLite (aiosqlite) をサポート
 - **自動マイグレーション** — モデルと DB スキーマの差分を検出して ALTER TABLE を生成
 - **Generic デスクリプタ** — `Column[T]` による型アノテーション推論。IDE の補完が正しく動作
+- **イベントフック** — `before_insert` / `after_update` などを Model に定義するだけで動作
+- **リレーション定義** — `relationship()` で FK ナビゲーション（前向き・逆参照）を宣言的に記述
 
 ## インストール
 
@@ -81,16 +83,55 @@ class Post(Model):
 
 `id` カラムは主キーとして自動追加されます。
 
+### ユーザー定義主キー
+
+`primary_key=True` を任意のカラムに付けると、そのカラムが主キーになります。自動採番は行われません。
+
+```python
+class Country(Model):
+    code = StrColumn(primary_key=True, nullable=False)  # "JP" / "US" など
+    name = StrColumn(nullable=False)
+
+    class Meta:
+        table_name = "country"
+
+# 主キーを明示して INSERT
+jp = await Country.create(code="JP", name="Japan")
+jp.name = "Japan (updated)"
+await jp.save()  # WHERE code = 'JP' で UPDATE
+```
+
+### 複合インデックス
+
+`Meta.indexes` にタプルのリストでインデックスを宣言します。`create_table()` 実行時に `CREATE INDEX` が自動発行されます。
+
+```python
+class Product(Model):
+    name     = StrColumn(nullable=False)
+    category = StrColumn(nullable=False)
+    price    = IntColumn(nullable=False)
+
+    class Meta:
+        table_name = "product"
+        indexes = [
+            ("category", "price"),  # 複合インデックス
+            ("name",),              # 単一カラムインデックス
+        ]
+```
+
 ## カラム型
 
-| クラス            | Python 型  | SQL 型                     |
-| ----------------- | ---------- | -------------------------- |
-| `IntColumn`       | `int`      | `INTEGER`                  |
-| `StrColumn`       | `str`      | `TEXT` / `VARCHAR(n)`      |
-| `FloatColumn`     | `float`    | `DOUBLE PRECISION`         |
-| `BoolColumn`      | `bool`     | `BOOLEAN`                  |
-| `DateTimeColumn`  | `datetime` | `TIMESTAMP WITH TIME ZONE` |
-| `ForeignKey`      | `int`      | `INTEGER REFERENCES ...`   |
+| クラス            | Python 型        | SQL 型                     |
+| ----------------- | ---------------- | -------------------------- |
+| `IntColumn`       | `int`            | `INTEGER`                  |
+| `StrColumn`       | `str`            | `TEXT` / `VARCHAR(n)`      |
+| `FloatColumn`     | `float`          | `DOUBLE PRECISION`         |
+| `BoolColumn`      | `bool`           | `BOOLEAN`                  |
+| `DateTimeColumn`  | `datetime`       | `TIMESTAMP WITH TIME ZONE` |
+| `DateColumn`      | `date`           | `DATE`                     |
+| `TimeColumn`      | `time`           | `TIME`                     |
+| `DecimalColumn`   | `Decimal`        | `NUMERIC(p, s)`            |
+| `ForeignKey`      | `int`            | `INTEGER REFERENCES ...`   |
 
 ### 共通オプション
 
@@ -100,12 +141,15 @@ StrColumn(
     default=None,        # デフォルト値
     unique=False,        # UNIQUE 制約
     primary_key=False,   # 主キー
+    index=False,         # 単一カラムインデックス
+    check="value > 0",   # CHECK 制約
 )
-StrColumn(max_length=255)        # → VARCHAR(255)
-IntColumn(auto_increment=True)   # → SERIAL PRIMARY KEY (PG) / AUTOINCREMENT (SQLite)
+StrColumn(max_length=255)          # → VARCHAR(255)
+IntColumn(auto_increment=True)     # → SERIAL PRIMARY KEY (PG) / AUTOINCREMENT (SQLite)
 DateTimeColumn(auto_now_add=True)  # INSERT 時に現在時刻を自動設定
 DateTimeColumn(auto_now=True)      # UPDATE 時に現在時刻を自動更新
 ForeignKey(Author, on_delete="CASCADE")
+DecimalColumn(max_digits=10, decimal_places=2)  # NUMERIC(10, 2)
 ```
 
 ## CRUD
@@ -147,6 +191,102 @@ await author.save()
 await author.delete()
 ```
 
+### 一括操作
+
+```python
+# 一括 INSERT (N 件を最小回数の SQL でまとめる)
+posts = [Post(title=f"記事{i}", views=0) for i in range(1000)]
+await Post.bulk_create(posts)
+
+# 一括 UPDATE
+await Post.filter(Post.published == False).update(published=True)
+
+# 一括 DELETE
+await Post.filter(Post.views == 0).delete()
+
+# TRUNCATE (シーケンスもリセット)
+await Post.truncate()
+```
+
+## イベントフック
+
+`save()` / `delete()` の前後に任意の処理を差し込めます。Model を継承したクラスでメソッドをオーバーライドするだけです。
+
+```python
+import datetime
+from kakaorm import Model, StrColumn, IntColumn, DateTimeColumn
+
+class Article(Model):
+    title      = StrColumn(nullable=False)
+    version    = IntColumn(nullable=False, default=0)
+    updated_at = DateTimeColumn(nullable=True)
+
+    async def before_insert(self) -> None:
+        # INSERT 直前: タイムスタンプを自動設定
+        self.updated_at = datetime.datetime.utcnow()
+
+    async def before_update(self) -> None:
+        # UPDATE 直前: バージョンをインクリメント
+        self.version = (self.version or 0) + 1
+        self.updated_at = datetime.datetime.utcnow()
+
+    async def after_delete(self) -> None:
+        # DELETE 完了後: ログ出力など
+        print(f"Article deleted: {self.title}")
+```
+
+利用可能なフック:
+
+| フック            | タイミング           |
+| ----------------- | -------------------- |
+| `before_insert`   | `save()` (INSERT 前) |
+| `after_insert`    | `save()` (INSERT 後) |
+| `before_update`   | `save()` (UPDATE 前) |
+| `after_update`    | `save()` (UPDATE 後) |
+| `before_delete`   | `delete()` 前        |
+| `after_delete`    | `delete()` 後        |
+
+> `QuerySet.update()` / `QuerySet.delete()` はフックを経由しません。
+
+## リレーション定義
+
+`relationship()` で FK を通じた関連オブジェクトの取得を宣言的に記述できます。`await` するまでクエリは発行されません。
+
+```python
+from kakaorm import Model, StrColumn, ForeignKey
+from kakaorm.relationship import relationship
+
+class Author(Model):
+    name  = StrColumn(nullable=False)
+    # 逆参照 (1 対多)
+    posts = relationship(Post, foreign_key="author_id", reverse=True)
+
+    class Meta:
+        table_name = "author"
+
+class Post(Model):
+    title     = StrColumn(nullable=False)
+    author_id = ForeignKey(Author, nullable=True)
+    # 前向き FK (多 対 1)
+    author = relationship(Author, foreign_key="author_id")
+
+    class Meta:
+        table_name = "post"
+
+# 使用例
+post   = await Post.get(Post.id == 1)
+author = await post.author          # → Author | None
+
+author = await Author.get(Author.id == 1)
+posts  = await author.posts         # → list[Post]
+```
+
+`related_model` には文字列でクラス名を渡すことも可能です（循環 import 回避）。
+
+```python
+posts = relationship("Post", foreign_key="author_id", reverse=True)
+```
+
 ## QuerySet — クエリビルダ
 
 `filter()` などのメソッドは `QuerySet` を返します。`await` するまで SQL は実行されません。
@@ -175,17 +315,9 @@ posts = await (
 # 特定カラムのみ SELECT
 rows = await Post.all().select(Post.title, Post.views)
 
-# COUNT
-n = await Post.filter(Post.published == True).count()
-
-# EXISTS
+# COUNT / EXISTS
+n      = await Post.filter(Post.published == True).count()
 exists = await Post.filter(Post.title.like("%Python%")).exists()
-
-# 一括 UPDATE
-updated = await Post.filter(Post.published == False).update(published=True)
-
-# 一括 DELETE
-deleted = await Post.filter(Post.views == 0).delete()
 
 # 非同期イテレーション
 async for post in Post.all().order_by(Post.views.desc):
@@ -208,6 +340,92 @@ Post.title.ilike("a%")     # ILIKE
 Post.views.in_([1, 2, 3])  # IN
 Post.views.not_in([1, 2])  # NOT IN
 Post.score.between(1, 5)   # BETWEEN
+```
+
+### JOIN / GROUP BY / 集計
+
+```python
+from kakaorm import Count, Sum, Avg
+
+# INNER JOIN
+rows = await (
+    Post.filter(Post.published == True)
+        .join(Author, on=Post.author_id == Author.id)
+        .select(Post.title, Author.name)
+)
+
+# LEFT JOIN
+rows = await (
+    Author.all()
+        .left_join(Post, on=Post.author_id == Author.id)
+        .select(Author.name, Count(Post.id).label("post_count"))
+        .group_by(Author.id, Author.name)
+)
+
+# 集計
+total = await Post.all().sum(Post.views)
+stats = await Post.all().aggregate(
+    total=Sum(Post.views),
+    avg=Avg(Post.views),
+)
+
+# GROUP BY / HAVING
+rows = await (
+    Post.all()
+        .select(Post.author_id, Count(Post.id).label("cnt"))
+        .group_by(Post.author_id)
+        .having(Count(Post.id) >= 2)
+)
+```
+
+### UPDATE 式 (列参照)
+
+```python
+# 固定値
+await Post.all().update(published=True)
+
+# 列参照を含む式
+await Post.all().update(views=Post.views + 1)
+await Product.all().update(price=Product.price * 0.97)
+```
+
+### INSERT ... SELECT
+
+```python
+await (
+    Employee.filter(Employee.hire_year <= 1993)
+        .insert_into(Archive, emp_id=Employee.id, year=Employee.hire_year)
+)
+```
+
+## Raw SQL
+
+ORM で表現が難しいクエリには Raw SQL を使用できます。
+
+```python
+# SELECT → list[dict]
+rows = await engine.fetch(
+    "SELECT p.title, a.name FROM post p JOIN author a ON p.author_id = a.id WHERE p.views > %s",
+    [100],
+)
+
+# INSERT / UPDATE / DELETE → 影響行数
+affected = await engine.execute(
+    "UPDATE post SET views = 0 WHERE author_id = %s",
+    [author_id],
+)
+
+# スカラー値
+count = await engine.fetchval("SELECT COUNT(*) FROM post WHERE published = %s", [True])
+```
+
+## トランザクション
+
+```python
+async with engine.transaction():
+    order = await Order.create(item="Widget", qty=1)
+    await Stock.filter(Stock.item == "Widget").update(qty=Stock.qty - 1)
+    # 例外発生時は自動ロールバック
 ```
 
 ## マイグレーション
@@ -241,6 +459,9 @@ engine = await kakaorm.connect("postgresql+asyncpg://user:password@localhost/dbn
 
 # PostgreSQL (psycopg3)
 engine = await kakaorm.connect("postgresql+psycopg3://user:password@localhost/dbname")
+
+# MySQL / MariaDB (aiomysql)
+engine = await kakaorm.connect("mysql+aiomysql://user:password@localhost:3306/dbname")
 
 # コンテキストマネージャとしても使用可能
 async with await kakaorm.connect("sqlite+aiosqlite:///:memory:") as engine:
@@ -293,30 +514,43 @@ python examples/fastapi_todo.py
 ```
 kakaorm/
 ├── kakaorm/                 # パッケージ本体
-│   ├── __init__.py          # Engine (AsyncpgEngine / AioSQLiteEngine / Psycopg3Engine), connect()
+│   ├── __init__.py          # Engine (AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine), connect()
 │   ├── model.py             # Model 基底クラス, AsyncORMMeta メタクラス
 │   ├── query.py             # QuerySet (遅延クエリビルダ)
+│   ├── relationship.py      # relationship() デスクリプタ
 │   ├── columns/
 │   │   ├── base.py          # Column[T] 基底クラス, ColumnMeta, WhereClause
-│   │   └── types.py         # IntColumn, StrColumn, FloatColumn, BoolColumn, DateTimeColumn, ForeignKey
+│   │   └── types.py         # IntColumn, StrColumn, FloatColumn, BoolColumn,
+│   │                        # DateTimeColumn, DateColumn, TimeColumn, DecimalColumn, ForeignKey
 │   └── migration/
 │       └── __init__.py      # Migrator, MigrationPlan
 ├── examples/
 │   ├── blog_example.py      # ブログシステムの使用例
 │   └── fastapi_todo.py      # FastAPI TODO リスト API
 ├── tests/
-│   └── test_asyncorm.py     # 統合テスト (aiosqlite in-memory)
+│   ├── conftest.py
+│   ├── test_crud.py
+│   ├── test_joins.py
+│   ├── test_aggregates.py
+│   ├── test_transaction.py
+│   ├── test_bulk_create.py
+│   ├── test_raw_sql.py
+│   ├── test_migration.py
+│   ├── test_indexes.py      # 複合インデックス
+│   ├── test_custom_pk.py    # ユーザー定義主キー
+│   ├── test_hooks.py        # イベントフック
+│   └── test_relationship.py # リレーション定義
 └── ruff.toml                # Ruff 設定
 ```
 
 ## テスト実行
 
 ```bash
-pip install aiosqlite
-python tests/test_asyncorm.py
+pip install aiosqlite pytest pytest-asyncio
+pytest
 ```
 
 ## 動作要件
 
 - Python 3.11 以上
-- 接続するデータベースに応じたドライバ (`aiosqlite` / `asyncpg` / `psycopg[binary]`)
+- 接続するデータベースに応じたドライバ (`aiosqlite` / `asyncpg` / `psycopg[binary]` / `aiomysql`)

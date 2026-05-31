@@ -16,15 +16,15 @@
 ## モデル・スキーマ
 
 - [ ] 複合主キー (PRIMARY KEY(col1, col2))
-- [ ] ユーザー定義主キー (auto id を使わない任意カラムを PK に指定)
+- [x] ユーザー定義主キー (auto id を使わない任意カラムを PK に指定)
 - [x] NUMERIC / DECIMAL 型 (FloatColumn は DOUBLE PRECISION で精度が異なる)
 - [x] DATE 型 / TIME 型 (DateTimeColumn は TIMESTAMP; 日付のみ・時刻のみの型がない)
 - [x] CHECK 制約
-- [ ] 複合インデックス
+- [x] 複合インデックス
 
 #### 低優先
 
-- [ ] リレーション定義 (`relationship()` 相当)
+- [x] リレーション定義 (`relationship()` 前向きFK・逆参照)
 - [ ] Lazy / Eager ローディング
 - [ ] テーブル継承 (single / joined / concrete)
 - [ ] カスタム型 (`TypeDecorator` 相当)
@@ -58,7 +58,7 @@
 
 - [x] バルクインサート (高速一括投入)
 - [x] Raw SQL との統合強化
-- [ ] イベントフック (before_insert / after_update 等)
+- [x] イベントフック (before_insert / after_insert / before_update / after_update / before_delete / after_delete)
 
 #### 低優先
 

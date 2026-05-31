@@ -9,11 +9,11 @@ Pydantic の BaseModel を継承しているため、
   - モデルクラス自体がクエリのエントリポイント (User.filter(...))
   - ColumnMeta が演算子オーバーロードでWhereClauseを生成
   - save() / delete() は常に await が必要 → asyncの一貫性を強制
+  - _is_new フラグで INSERT / UPDATE を判別する
 """
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, ClassVar, Type, TypeVar
 
 from kakaorm.columns.base import Column, ColumnMeta, WhereClause
@@ -25,9 +25,23 @@ T = TypeVar("T", bound="Model")
 class ModelMeta:
     """モデルのメタ情報コンテナ。"""
 
-    def __init__(self, table_name: str, columns: dict[str, Column]) -> None:
+    def __init__(
+        self,
+        table_name: str,
+        columns: dict[str, Column],
+        pk_name: str = "id",
+        indexes: list[tuple[str, ...]] | None = None,
+    ) -> None:
         self.table_name = table_name
-        self.columns = columns  # name -> Column
+        self.columns = columns
+        self.pk_name = pk_name
+        self.indexes: list[tuple[str, ...]] = indexes or []
+
+    @property
+    def is_auto_pk(self) -> bool:
+        """主キーカラムが自動採番（auto_increment）かどうか。"""
+        pk_col = self.columns.get(self.pk_name)
+        return pk_col is not None and getattr(pk_col, "auto_increment", False)
 
 
 class AsyncORMMeta(type):
@@ -39,6 +53,7 @@ class AsyncORMMeta(type):
       2. 各 Column を ColumnMeta でラップしてクラス属性に差し替え
          → User.age は ColumnMeta インスタンスになる
       3. 暗黙の id: IntColumn(primary_key=True) を追加 (明示されていなければ)
+      4. Meta.indexes から複合インデックスを収集
     """
 
     def __new__(
@@ -61,9 +76,15 @@ class AsyncORMMeta(type):
                 value._name = attr_name
                 columns[attr_name] = value
 
-        # 主キーがなければ暗黙の id を追加
+        # 主キーを特定 / なければ暗黙の id を追加
+        pk_name = "id"
         has_pk = any(c.primary_key for c in columns.values())
-        if not has_pk and name != "Model":
+        if has_pk:
+            for attr_name, col in columns.items():
+                if col.primary_key:
+                    pk_name = attr_name
+                    break
+        elif name != "Model":
             id_col = IntColumn(primary_key=True, auto_increment=True, nullable=False)
             id_col._name = "id"
             columns["id"] = id_col
@@ -77,7 +98,21 @@ class AsyncORMMeta(type):
         if inner_meta and hasattr(inner_meta, "table_name"):
             table_name = inner_meta.table_name
 
-        cls._meta = ModelMeta(table_name=table_name, columns=columns)
+        # 複合インデックス: Meta.indexes = [("col_a", "col_b"), ...]
+        indexes: list[tuple[str, ...]] = []
+        if inner_meta and hasattr(inner_meta, "indexes"):
+            for idx in inner_meta.indexes:
+                if isinstance(idx, str):
+                    indexes.append((idx,))
+                else:
+                    indexes.append(tuple(idx))
+
+        cls._meta = ModelMeta(
+            table_name=table_name,
+            columns=columns,
+            pk_name=pk_name,
+            indexes=indexes,
+        )
 
         # ColumnMeta でラップしてクラス属性に差し替え
         for col_name, col in columns.items():
@@ -109,6 +144,14 @@ class Model(metaclass=AsyncORMMeta):
 
         # 削除
         await user.delete()
+
+    イベントフック:
+        class User(Model):
+            async def before_insert(self) -> None:
+                self.created_at = datetime.utcnow()
+
+            async def after_update(self) -> None:
+                print(f"User {self.id} updated")
     """
 
     _meta: ClassVar[ModelMeta]
@@ -123,10 +166,13 @@ class Model(metaclass=AsyncORMMeta):
         for col_name, col in self._meta.columns.items():
             val = kwargs.get(col_name, col.default)
             self._data[col_name] = val
+        # DB から取得したインスタンスは False、新規生成は True
+        self._is_new: bool = True
 
     def __repr__(self) -> str:
-        pk = self._data.get("id", "?")
-        return f"<{type(self).__name__} id={pk}>"
+        pk_name = self._meta.pk_name
+        pk = self._data.get(pk_name, "?")
+        return f"<{type(self).__name__} {pk_name}={pk}>"
 
     def __getattribute__(self, name: str) -> Any:
         # _で始まる属性・クラスメソッドは通常通り返す
@@ -149,6 +195,26 @@ class Model(metaclass=AsyncORMMeta):
             self._data[name] = value
         else:
             object.__setattr__(self, name, value)
+
+    # ── イベントフック（サブクラスでオーバーライド）───────────────
+
+    async def before_insert(self) -> None:
+        """INSERT 直前に呼ばれる。サブクラスでオーバーライドして使う。"""
+
+    async def after_insert(self) -> None:
+        """INSERT 完了直後に呼ばれる。"""
+
+    async def before_update(self) -> None:
+        """UPDATE 直前に呼ばれる。"""
+
+    async def after_update(self) -> None:
+        """UPDATE 完了直後に呼ばれる。"""
+
+    async def before_delete(self) -> None:
+        """DELETE 直前に呼ばれる。"""
+
+    async def after_delete(self) -> None:
+        """DELETE 完了直後に呼ばれる。"""
 
     # ── クラスメソッド: クエリエントリポイント ─────────────────
 
@@ -253,23 +319,30 @@ class Model(metaclass=AsyncORMMeta):
     # ── インスタンスメソッド ──────────────────────────────────
 
     async def save(self) -> None:
-        """INSERT または UPDATE を実行する。id が None なら INSERT。"""
+        """INSERT または UPDATE を実行する。_is_new が True なら INSERT。"""
         if self._engine is None:
             raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
-        pk_val = self._data.get("id")
-        if pk_val is None:
+        if self._is_new:
+            await self.before_insert()
             await self._engine._insert(self)
+            self._is_new = False
+            await self.after_insert()
         else:
+            await self.before_update()
             await self._engine._update(self)
+            await self.after_update()
 
     async def delete(self) -> None:
         """DELETE を実行する。"""
         if self._engine is None:
             raise RuntimeError("No engine connected.")
-        pk_val = self._data.get("id")
+        pk_name = self._meta.pk_name
+        pk_val = self._data.get(pk_name)
         if pk_val is None:
             raise ValueError("Cannot delete an unsaved model instance.")
+        await self.before_delete()
         await self._engine._delete(type(self), pk_val)
+        await self.after_delete()
 
     def to_dict(self) -> dict[str, Any]:
         """現在のフィールド値を辞書として返す。"""

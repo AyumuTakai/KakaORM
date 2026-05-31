@@ -137,25 +137,46 @@ class Engine(ABC):
     # ── ORM 内部から呼ばれる操作 ─────────────────────────────
 
     async def _insert(self, instance: Any) -> None:
-        """Model インスタンスを INSERT し、生成された id を書き戻す。"""
+        """Model インスタンスを INSERT し、生成された pk を書き戻す。"""
         meta = instance._meta
-        cols = [
-            name for name, col in meta.columns.items()
-            if not col.primary_key and instance._data.get(name) is not None
-        ]
+        pk_name = meta.pk_name
+        is_auto = meta.is_auto_pk
+
+        if is_auto:
+            # 自動採番 PK はカラムリストから除外し、RETURNING で取得する
+            cols = [
+                name for name, col in meta.columns.items()
+                if not col.primary_key and instance._data.get(name) is not None
+            ]
+        else:
+            # ユーザー定義 PK はカラムリストに含める
+            cols = [
+                name for name, col in meta.columns.items()
+                if instance._data.get(name) is not None
+            ]
+
         values = [meta.columns[c].to_db(instance._data[c]) for c in cols]
         placeholders = self._placeholders(len(cols))
-        sql = (
-            f"INSERT INTO {meta.table_name} ({', '.join(cols)}) "
-            f"VALUES ({placeholders}) "
-            f"RETURNING id"
-        )
-        new_id = await self._fetchval(sql, values)
-        instance._data["id"] = new_id
+
+        if is_auto:
+            sql = (
+                f"INSERT INTO {meta.table_name} ({', '.join(cols)}) "
+                f"VALUES ({placeholders}) "
+                f"RETURNING {pk_name}"
+            )
+            new_pk = await self._fetchval(sql, values)
+            instance._data[pk_name] = new_pk
+        else:
+            sql = (
+                f"INSERT INTO {meta.table_name} ({', '.join(cols)}) "
+                f"VALUES ({placeholders})"
+            )
+            await self._execute(sql, values)
 
     async def _update(self, instance: Any) -> None:
         """Model インスタンスを UPDATE する。"""
         meta = instance._meta
+        pk_name = meta.pk_name
         col_names = [
             name for name, col in meta.columns.items()
             if not col.primary_key
@@ -168,15 +189,16 @@ class Engine(ABC):
         sql = (
             f"UPDATE {meta.table_name} "
             f"SET {set_clause} "
-            f"WHERE id = {pk_placeholder}"
+            f"WHERE {pk_name} = {pk_placeholder}"
         )
-        await self._execute(sql, values + [instance._data["id"]])
+        await self._execute(sql, values + [instance._data[pk_name]])
 
     async def _delete(self, model_cls: Any, pk: Any) -> None:
         """primary key で 1 件 DELETE する。"""
         meta = model_cls._meta
+        pk_name = meta.pk_name
         pk_placeholder = self._param(1)
-        sql = f"DELETE FROM {meta.table_name} WHERE id = {pk_placeholder}"
+        sql = f"DELETE FROM {meta.table_name} WHERE {pk_name} = {pk_placeholder}"
         await self._execute(sql, [pk])
 
     async def _bulk_insert(self, model_cls: Any, instances: list) -> None:
@@ -201,6 +223,16 @@ class Engine(ABC):
             + "\n)"
         )
         await self._execute(sql, [])
+        await self._create_indexes(meta, if_not_exists=if_not_exists)
+
+    async def _create_indexes(self, meta: Any, *, if_not_exists: bool = True) -> None:
+        """Meta.indexes で宣言された複合インデックスを CREATE INDEX で発行する。"""
+        exists = "IF NOT EXISTS " if if_not_exists else ""
+        for idx_cols in meta.indexes:
+            idx_name = f"idx_{meta.table_name}_{'_'.join(idx_cols)}"
+            cols_sql = ", ".join(idx_cols)
+            sql = f"CREATE INDEX {exists}{idx_name} ON {meta.table_name} ({cols_sql})"
+            await self._execute(sql, [])
 
     async def drop_table(self, model_cls: Any, *, if_exists: bool = True) -> None:
         """DROP TABLE を実行する。"""
@@ -293,11 +325,17 @@ class AsyncpgEngine(Engine):
             return await conn.fetchval(sql, *params)
 
     async def _bulk_insert(self, model_cls: Any, instances: list) -> None:
-        """asyncpg 最適化: multi-row INSERT ... RETURNING id で全 ID を一括取得。"""
+        """asyncpg 最適化: multi-row INSERT ... RETURNING pk で全 PK を一括取得。"""
         if not instances:
             return
         meta = model_cls._meta
-        cols = [name for name, col in meta.columns.items() if not col.primary_key]
+        pk_name = meta.pk_name
+        is_auto = meta.is_auto_pk
+
+        if is_auto:
+            cols = [name for name, col in meta.columns.items() if not col.primary_key]
+        else:
+            cols = list(meta.columns.keys())
         if not cols:
             return
 
@@ -308,23 +346,36 @@ class AsyncpgEngine(Engine):
             row_phs.append(
                 "(" + ", ".join(f"${offset + j + 1}" for j in range(n_cols)) + ")"
             )
-        sql = (
-            f"INSERT INTO {meta.table_name} ({', '.join(cols)})"
-            f" VALUES {', '.join(row_phs)} RETURNING id"
-        )
         all_params = [
             meta.columns[col_name].to_db(inst._data.get(col_name))
             for inst in instances
             for col_name in cols
         ]
-        conn = _tx_conn.get()
-        if conn:
-            rows = await conn.fetch(sql, *all_params)
-        else:
-            async with self._pool.acquire() as conn:
+
+        if is_auto:
+            sql = (
+                f"INSERT INTO {meta.table_name} ({', '.join(cols)})"
+                f" VALUES {', '.join(row_phs)} RETURNING {pk_name}"
+            )
+            conn = _tx_conn.get()
+            if conn:
                 rows = await conn.fetch(sql, *all_params)
-        for inst, row in zip(instances, rows):
-            inst._data["id"] = row["id"]
+            else:
+                async with self._pool.acquire() as conn:
+                    rows = await conn.fetch(sql, *all_params)
+            for inst, row in zip(instances, rows):
+                inst._data[pk_name] = row[pk_name]
+        else:
+            sql = (
+                f"INSERT INTO {meta.table_name} ({', '.join(cols)})"
+                f" VALUES {', '.join(row_phs)}"
+            )
+            conn = _tx_conn.get()
+            if conn:
+                await conn.execute(sql, *all_params)
+            else:
+                async with self._pool.acquire() as conn:
+                    await conn.execute(sql, *all_params)
 
     @asynccontextmanager
     async def transaction(self):
@@ -402,7 +453,13 @@ class AioSQLiteEngine(Engine):
         if not instances:
             return
         meta = model_cls._meta
-        cols = [name for name, col in meta.columns.items() if not col.primary_key]
+        pk_name = meta.pk_name
+        is_auto = meta.is_auto_pk
+
+        if is_auto:
+            cols = [name for name, col in meta.columns.items() if not col.primary_key]
+        else:
+            cols = list(meta.columns.keys())
         if not cols:
             return
 
@@ -427,10 +484,11 @@ class AioSQLiteEngine(Engine):
                     await self._conn.commit()
                 last_id = cursor.lastrowid
 
-            # SQLite の lastrowid は最後に挿入した行の ID
-            first_id = last_id - len(batch) + 1
-            for j, inst in enumerate(batch):
-                inst._data["id"] = first_id + j
+            if is_auto:
+                # SQLite の lastrowid は最後に挿入した行の ID
+                first_id = last_id - len(batch) + 1
+                for j, inst in enumerate(batch):
+                    inst._data[pk_name] = first_id + j
 
     @asynccontextmanager
     async def transaction(self):
@@ -471,6 +529,7 @@ class AioSQLiteEngine(Engine):
             + "\n)"
         )
         await self._execute(sql, [])
+        await self._create_indexes(meta, if_not_exists=if_not_exists)
 
     async def truncate(self, model_cls: Any, *, restart_identity: bool = True) -> None:
         """SQLite 用: DELETE FROM で全行削除し、sqlite_sequence でシーケンスをリセット。"""
@@ -619,6 +678,7 @@ class AioMySQLEngine(Engine):
             + "\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
         )
         await self._execute(sql, [])
+        await self._create_indexes(meta, if_not_exists=if_not_exists)
 
 
 # ── Psycopg3 Engine ───────────────────────────────────────────
@@ -779,6 +839,7 @@ from kakaorm.columns.base import (  # noqa: E402
     Max,
     Min,
 )
+from kakaorm.relationship import relationship  # noqa: E402
 
 __all__ = [
     # Engine
@@ -800,6 +861,8 @@ __all__ = [
     "DecimalColumn",
     "DateColumn",
     "TimeColumn",
+    # Relationships
+    "relationship",
     # Aggregate functions
     "AggFunc",
     "Count",
