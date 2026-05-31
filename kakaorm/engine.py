@@ -22,7 +22,7 @@ import contextvars
 import re
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
-from typing import Any, Type
+from typing import Any
 from urllib.parse import urlparse
 
 # ── トランザクション用 ContextVar ─────────────────────────────

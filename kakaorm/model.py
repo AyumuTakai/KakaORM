@@ -15,7 +15,10 @@ Pydantic v2 プロトコル (__get_pydantic_core_schema__ / __get_pydantic_json_
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Type, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Type, TypeVar
+
+if TYPE_CHECKING:
+    from kakaorm.query import QuerySet
 
 from kakaorm.columns.base import Column, ColumnMeta, WhereClause
 from kakaorm.columns.types import IntColumn

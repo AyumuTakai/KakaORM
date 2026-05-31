@@ -17,7 +17,11 @@ import copy
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Generic, Type, TypeVar
 
-from kakaorm.columns.base import AggFunc, Avg, Case, ColumnCompare, Count, Max, Min, Sum, UpdateExpr, WhereClause
+from kakaorm.columns.base import AggFunc, Avg, Case, ColumnCompare, Max, Min, Sum, UpdateExpr, WhereClause
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from kakaorm.model import Model
 
 T = TypeVar("T", bound="Model")  # type: ignore[type-arg]
 
