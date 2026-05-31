@@ -49,7 +49,7 @@ async def main():
     task.done = True
     await task.save()
 
-    tasks = await Task.filter(Task.done == True)
+    tasks = await Task.where(Task.done == True)
     print(tasks)  # [<Task id=1>]
 
     await engine.disconnect()
@@ -199,10 +199,10 @@ posts = [Post(title=f"記事{i}", views=0) for i in range(1000)]
 await Post.bulk_create(posts)
 
 # 一括 UPDATE
-await Post.filter(Post.published == False).update(published=True)
+await Post.where(Post.published == False).update(published=True)
 
 # 一括 DELETE
-await Post.filter(Post.views == 0).delete()
+await Post.where(Post.views == 0).delete()
 
 # TRUNCATE (シーケンスもリセット)
 await Post.truncate()
@@ -289,24 +289,24 @@ posts = relationship("Post", foreign_key="author_id", reverse=True)
 
 ## QuerySet — クエリビルダ
 
-`filter()` などのメソッドは `QuerySet` を返します。`await` するまで SQL は実行されません。
+`where()` などのメソッドは `QuerySet` を返します。`await` するまで SQL は実行されません。
 
 ```python
 # 絞り込み (AND)
-posts = await Post.filter(Post.published == True).filter(Post.views >= 100)
+posts = await Post.where(Post.published == True).where(Post.views >= 100)
 
 # 複合条件
-posts = await Post.filter(
+posts = await Post.where(
     (Post.published == True) & (Post.views >= 100)
 )
 
 # OR / NOT
 clause = (Post.views < 10) | (Post.published == False)
-posts  = await Post.filter(~clause)
+posts  = await Post.where(~clause)
 
 # ソート・ページネーション
 posts = await (
-    Post.filter(Post.published == True)
+    Post.where(Post.published == True)
         .order_by(Post.views.desc)
         .limit(10)
         .offset(20)
@@ -316,8 +316,8 @@ posts = await (
 rows = await Post.all().select(Post.title, Post.views)
 
 # COUNT / EXISTS
-n      = await Post.filter(Post.published == True).count()
-exists = await Post.filter(Post.title.like("%Python%")).exists()
+n      = await Post.where(Post.published == True).count()
+exists = await Post.where(Post.title.like("%Python%")).exists()
 
 # 非同期イテレーション
 async for post in Post.all().order_by(Post.views.desc):
@@ -349,7 +349,7 @@ from kakaorm import Count, Sum, Avg
 
 # INNER JOIN
 rows = await (
-    Post.filter(Post.published == True)
+    Post.where(Post.published == True)
         .join(Author, on=Post.author_id == Author.id)
         .select(Post.title, Author.name)
 )
@@ -393,7 +393,7 @@ await Product.all().update(price=Product.price * 0.97)
 
 ```python
 await (
-    Employee.filter(Employee.hire_year <= 1993)
+    Employee.where(Employee.hire_year <= 1993)
         .insert_into(Archive, emp_id=Employee.id, year=Employee.hire_year)
 )
 ```
@@ -424,7 +424,7 @@ count = await engine.fetchval("SELECT COUNT(*) FROM post WHERE published = %s", 
 ```python
 async with engine.transaction():
     order = await Order.create(item="Widget", qty=1)
-    await Stock.filter(Stock.item == "Widget").update(qty=Stock.qty - 1)
+    await Stock.where(Stock.item == "Widget").update(qty=Stock.qty - 1)
     # 例外発生時は自動ロールバック
 ```
 
