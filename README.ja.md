@@ -1155,7 +1155,8 @@ kakaorm/
 │       └── __init__.py      # Migrator, VersionedMigrator, MigrationPlan
 ├── examples/
 │   ├── blog_example.py      # ブログシステムの使用例
-│   └── fastapi_todo.py      # FastAPI TODO リスト API
+│   ├── fastapi_todo.py      # FastAPI TODO リスト API
+│   └── flask_todo.py        # Flask TODO リスト API
 ├── tests/
 │   ├── conftest.py
 │   ├── test_crud.py

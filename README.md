@@ -1191,7 +1191,8 @@ kakaorm/
 │       └── __init__.py      # Migrator, VersionedMigrator, MigrationPlan
 ├── examples/
 │   ├── blog_example.py      # Blog system usage example
-│   └── fastapi_todo.py      # FastAPI TODO list API
+│   ├── fastapi_todo.py      # FastAPI TODO list API
+│   └── flask_todo.py        # Flask TODO list API
 ├── tests/
 │   ├── conftest.py
 │   ├── test_crud.py
