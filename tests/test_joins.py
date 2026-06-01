@@ -57,7 +57,7 @@ class TestLeftJoin:
     async def test_left_join_sql(self):
         sql, _ = Post.all().left_join(Author, on=Post.author_id == Author.id)._build_sql()
         assert "LEFT JOIN" in sql
-        assert "ON post.author_id = author.id" in sql
+        assert "ON [post].[author_id] = [author].[id]" in sql
 
 
 class TestRightJoin:

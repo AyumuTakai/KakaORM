@@ -96,7 +96,7 @@ class TestQuerySetSqlGeneration:
     def test_select_all(self):
         sql, _ = Post.all()._build_sql()
         assert "SELECT *" in sql
-        assert "FROM post" in sql
+        assert "FROM [post]" in sql
 
     def test_where(self):
         sql, params = Post.where(Post.views >= 100)._build_sql()
@@ -119,7 +119,7 @@ class TestQuerySetSqlGeneration:
 
     def test_select_cols(self):
         sql, _ = Post.all().select(Post.title, Post.views)._build_sql()
-        assert "SELECT post.title, post.views" in sql
+        assert "SELECT [post].[title], [post].[views]" in sql
         assert "*" not in sql
 
     def test_group_by(self):
@@ -143,7 +143,7 @@ class TestQuerySetSqlGeneration:
     def test_inner_join(self):
         sql, _ = Post.all().join(Author, on=Post.author_id == Author.id)._build_sql()
         assert "INNER JOIN" in sql
-        assert "ON post.author_id = author.id" in sql
+        assert "ON [post].[author_id] = [author].[id]" in sql
 
     def test_left_join(self):
         sql, _ = Post.all().left_join(Author, on=Post.author_id == Author.id)._build_sql()
@@ -155,7 +155,7 @@ class TestQuerySetSqlGeneration:
 
     def test_join_uses_qualified_wildcard(self):
         sql, _ = Post.all().join(Author, on=Post.author_id == Author.id)._build_sql()
-        assert "post.*" in sql
+        assert "[post].*" in sql
 
     def test_complex_query(self):
         sql, params = (

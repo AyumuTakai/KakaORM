@@ -345,7 +345,42 @@ class QuerySet(Generic[T]):
         if self._offset_val is not None:
             sql += f" OFFSET {self._offset_val}"
 
+        # Quote identifiers in WHERE/GROUP BY/ORDER BY/HAVING clauses
+        # (table name and column names are already quoted in FROM, JOIN, SELECT)
+        if self._model._engine:
+            sql = self._quote_identifiers_in_where(sql)
+
         return sql, params
+
+    def _quote_identifiers_in_where(self, sql: str) -> str:
+        """
+        WHERE/GROUP BY/ORDER BY/HAVING 句内のテーブル名・カラム名をクォート。
+        JOIN されるモデルのカラムもクォート。
+        """
+        engine = self._model._engine
+        if not engine or not hasattr(engine, 'quote_identifier'):
+            return sql
+
+        # メインテーブルとカラム名
+        table_name = self._model._meta.table_name
+        col_names = list(self._model._meta.columns.keys())
+
+        # 置換処理: table_name.col_name の形式をクォート
+        for col_name in col_names:
+            qualified = f"{table_name}.{col_name}"
+            quoted_qualified = f"{engine.quote_identifier(table_name)}.{engine.quote_identifier(col_name)}"
+            sql = sql.replace(qualified, quoted_qualified)
+
+        # JOINされるモデルもクォート処理
+        for join_clause in self._joins:
+            joined_table = join_clause.model._meta.table_name
+            joined_cols = list(join_clause.model._meta.columns.keys())
+            for col_name in joined_cols:
+                qualified = f"{joined_table}.{col_name}"
+                quoted_qualified = f"{engine.quote_identifier(joined_table)}.{engine.quote_identifier(col_name)}"
+                sql = sql.replace(qualified, quoted_qualified)
+
+        return sql
 
     @property
     def _returns_raw(self) -> bool:

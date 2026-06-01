@@ -180,17 +180,21 @@ class Engine(ABC):
         values = [meta.columns[c].to_db(instance._data[c]) for c in cols]
         placeholders = self._placeholders(len(cols))
 
+        # Quote table name and column names
+        table = self.quote_identifier(meta.table_name)
+        cols_quoted = [self.quote_identifier(c) for c in cols]
+
         if is_auto:
             sql = (
-                f"INSERT INTO {meta.table_name} ({', '.join(cols)}) "
+                f"INSERT INTO {table} ({', '.join(cols_quoted)}) "
                 f"VALUES ({placeholders}) "
-                f"RETURNING {pk_name}"
+                f"RETURNING {self.quote_identifier(pk_name)}"
             )
             new_pk = await self._fetchval(sql, values)
             instance._data[pk_name] = new_pk
         else:
             sql = (
-                f"INSERT INTO {meta.table_name} ({', '.join(cols)}) "
+                f"INSERT INTO {table} ({', '.join(cols_quoted)}) "
                 f"VALUES ({placeholders})"
             )
             await self._execute(sql, values)
@@ -205,13 +209,14 @@ class Engine(ABC):
         ]
         values = [meta.columns[c].to_db(instance._data.get(c)) for c in col_names]
         set_clause = ", ".join(
-            f"{name} = {self._param(i + 1)}" for i, name in enumerate(col_names)
+            f"{self.quote_identifier(name)} = {self._param(i + 1)}" for i, name in enumerate(col_names)
         )
         pk_placeholder = self._param(len(col_names) + 1)
+        table = self.quote_identifier(meta.table_name)
         sql = (
-            f"UPDATE {meta.table_name} "
+            f"UPDATE {table} "
             f"SET {set_clause} "
-            f"WHERE {pk_name} = {pk_placeholder}"
+            f"WHERE {self.quote_identifier(pk_name)} = {pk_placeholder}"
         )
         await self._execute(sql, values + [instance._data[pk_name]])
 
@@ -220,7 +225,8 @@ class Engine(ABC):
         meta = model_cls._meta
         pk_name = meta.pk_name
         pk_placeholder = self._param(1)
-        sql = f"DELETE FROM {meta.table_name} WHERE {pk_name} = {pk_placeholder}"
+        table = self.quote_identifier(meta.table_name)
+        sql = f"DELETE FROM {table} WHERE {self.quote_identifier(pk_name)} = {pk_placeholder}"
         await self._execute(sql, [pk])
 
     async def _bulk_insert(self, model_cls: Any, instances: list) -> None:
@@ -288,7 +294,7 @@ class Engine(ABC):
         MySQL では ``TRUNCATE TABLE`` を発行する。
         SQLite は TRUNCATE 非対応のため ``AioSQLiteEngine`` でオーバーライドする。
         """
-        table = model_cls._meta.table_name
+        table = self.quote_identifier(model_cls._meta.table_name)
         restart = " RESTART IDENTITY" if restart_identity else ""
         await self._execute(f"TRUNCATE TABLE {table}{restart}", [])
 
@@ -492,12 +498,15 @@ class AioSQLiteEngine(Engine):
         has_returning = "RETURNING" in sql.upper()
         sql_exec = re.sub(r"\s+RETURNING\s+\w+", "", sql_exec, flags=re.IGNORECASE)
         async with self._conn.execute(sql_exec, params) as cursor:
-            if not _in_tx.get():
-                await self._conn.commit()
             if has_returning:
-                return cursor.lastrowid
-            row = await cursor.fetchone()
-            return row[0] if row else None
+                val = cursor.lastrowid
+            else:
+                row = await cursor.fetchone()
+                val = row[0] if row else None
+        # コンテキストを抜けた後にcommit
+        if not _in_tx.get():
+            await self._conn.commit()
+        return val
 
     async def _bulk_insert(self, model_cls: Any, instances: list) -> None:
         """SQLite 最適化: 1回の multi-row INSERT にまとめる。"""

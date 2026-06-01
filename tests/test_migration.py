@@ -75,8 +75,8 @@ class TestDownStatements:
 
         migrator = Migrator(eng)
         plan = await migrator.plan([ColModel])
-        # extra カラム追加の DOWN は DROP COLUMN extra
-        assert any("DROP COLUMN extra" in s for s in plan.down_statements)
+        # extra カラム追加の DOWN は DROP COLUMN extra（クォート文字を含む）
+        assert any("DROP COLUMN [extra]" in s or "DROP COLUMN extra" in s for s in plan.down_statements)
 
     async def test_apply_down_new_table(self, engine):
         """apply_down() で作成したテーブルを削除できる。"""
