@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kakaorm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Async-native ORM for PostgreSQL, SQLite, and MySQL/MariaDB"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -24,19 +24,28 @@ classifiers = [
     "Framework :: AsyncIO",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    "typer[all]>=0.9.0",
+    "python-dotenv>=1.0.0",
+]
 
 [project.optional-dependencies]
 asyncpg  = ["asyncpg>=0.29"]
 aiosqlite = ["aiosqlite>=0.20"]
 aiomysql = ["aiomysql>=0.2"]
 psycopg3 = ["psycopg[binary]>=3.1", "psycopg-pool>=3.1"]
+cli = [
+    "typer[all]>=0.9.0",
+    "python-dotenv>=1.0.0",
+]
 all = [
     "asyncpg>=0.29",
     "aiosqlite>=0.20",
     "aiomysql>=0.2",
     "psycopg[binary]>=3.1",
     "psycopg-pool>=3.1",
+    "typer[all]>=0.9.0",
+    "python-dotenv>=1.0.0",
 ]
 dev = [
     "pytest>=8.0",
@@ -44,6 +53,9 @@ dev = [
     "aiosqlite>=0.20",
     "ruff>=0.4",
 ]
+
+[project.scripts]
+kakaorm = "kakaorm.cli:main"
 
 [project.urls]
 Homepage   = "https://github.com/ayumu-takai/kakaorm"

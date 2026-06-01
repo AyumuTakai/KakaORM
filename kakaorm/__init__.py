@@ -1,4 +1,4 @@
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from kakaorm.engine import (
     Engine,
@@ -29,10 +29,23 @@ from kakaorm.columns.base import (
     Max,
     Min,
     When,
+    WindowFunc,
+    RowNumber,
+    Rank,
+    DenseRank,
+    Lag,
+    Lead,
+    WindowedAgg,
 )
 from kakaorm.relationship import has_many, has_one, belongs_to
 from kakaorm.query import Subquery
 from kakaorm.migration import Migrator, VersionedMigrator
+
+# CLI（オプション依存なので try/except）
+try:
+    from kakaorm.cli.cli import main as cli_main
+except ImportError:
+    cli_main = None  # type: ignore
 
 __all__ = [
     # Engine
@@ -70,7 +83,17 @@ __all__ = [
     # CASE WHEN
     "Case",
     "When",
+    # Window Functions
+    "WindowFunc",
+    "RowNumber",
+    "Rank",
+    "DenseRank",
+    "Lag",
+    "Lead",
+    "WindowedAgg",
     # Migration
     "Migrator",
     "VersionedMigrator",
+    # CLI (optional)
+    "cli_main",
 ]

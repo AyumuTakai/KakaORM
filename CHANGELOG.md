@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-01
+
+### Added
+
+- **CTE (WITH clause)** — Complex query support via `with_cte()` method
+- **Eager loading (prefetch)** — N+1 problem elimination with `prefetch()` method for all relationship types
+- **Migration downgrade** — Rollback capability via `downgrade()` method with automatic reverse SQL generation
+- **Migration autogenerate** — Automatic migration file generation via `autogenerate()` from model-DB diffs
+- **Migration CLI** — Command-line interface via `kakaorm` command:
+  - `kakaorm init` — Initialize migrations directory
+  - `kakaorm makemigrations` — Auto-generate migration files
+  - `kakaorm migrate` — Apply or rollback migrations
+  - `kakaorm showmigrations` — View migration history
+- **Window Functions** — SQL window functions support:
+  - `RowNumber()`, `Rank()`, `DenseRank()` for ranking
+  - `Lag()`, `Lead()` for offset functions
+  - `Sum().over()`, `Avg().over()`, `Min().over()`, `Max().over()` for aggregate windows
+- **FastAPI Integration Guide** — Comprehensive documentation with 3 example implementations:
+  - `fastapi_advanced.py` — Dependency injection and multi-model patterns
+  - `fastapi_pagination.py` — Pagination and filtering
+  - `fastapi_testing.py` — Testing strategies
+
+### Changed
+
+- Enhanced `QuerySet._parse_exprs()` to recognize and handle window functions
+- Extended `AggFunc` with `.over()` method for aggregate window support
+- Improved `Pydantic v2` integration documentation
+
+### Fixed
+
+- None reported
+
+[0.2.0]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.2.0
+
 ## [0.1.0] - 2026-06-01
 
 ### Added
