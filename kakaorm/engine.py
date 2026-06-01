@@ -669,8 +669,6 @@ class AioMySQLEngine(Engine):
 
     async def _insert(self, instance: Any) -> None:
         """MySQL 版: RETURNING 非対応のため lastrowid を使用。"""
-        import aiomysql  # type: ignore
-
         meta = instance._meta
         pk_name = meta.pk_name
         is_auto = meta.is_auto_pk
