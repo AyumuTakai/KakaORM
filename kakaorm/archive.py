@@ -28,19 +28,15 @@ SELECT はデフォルトでメインテーブルのみを対象にする。
 
 from __future__ import annotations
 
-import copy
 from datetime import datetime, timezone
 from typing import Any, Type, TypeVar
 
 from kakaorm.columns.base import WhereClause
 from kakaorm.model import Model
 from kakaorm.query import QuerySet
+from kakaorm.soft_delete import DELETED_EXCLUDE, DELETED_INCLUDE, DELETED_ONLY
 
 T = TypeVar("T", bound="ArchiveModel")
-
-_EXCLUDE = "exclude"
-_INCLUDE = "include"
-_ONLY    = "only"
 
 _ARCHIVE_PREFIX = "archive_"
 _ARCHIVED_AT    = "archived_at"
@@ -56,33 +52,23 @@ class ArchiveQuerySet(QuerySet[T]):
 
     def __init__(self, model: Type[T]) -> None:
         super().__init__(model)
-        self._deleted_filter: str = _EXCLUDE
+        self._deleted_filter: str = DELETED_EXCLUDE
 
-    def _clone(self) -> "ArchiveQuerySet[T]":
-        new = ArchiveQuerySet(self._model)
-        new._where          = list(self._where)
-        new._order_by       = list(self._order_by)
-        new._limit_val      = self._limit_val
-        new._offset_val     = self._offset_val
-        new._select_cols    = copy.copy(self._select_cols)
-        new._group_by       = list(self._group_by)
-        new._having         = list(self._having)
-        new._joins          = list(self._joins)
-        new._ctes           = list(self._ctes)
-        new._prefetch_names = list(self._prefetch_names)
-        new._deleted_filter = self._deleted_filter
-        return new
+    def _copy_state_to(self, target: "QuerySet[T]") -> None:
+        super()._copy_state_to(target)
+        if isinstance(target, ArchiveQuerySet):
+            target._deleted_filter = self._deleted_filter
 
     def include_deleted(self) -> "ArchiveQuerySet[T]":
         """メインテーブルとアーカイブテーブルを UNION ALL で取得する。"""
         qs = self._clone()
-        qs._deleted_filter = _INCLUDE
+        qs._deleted_filter = DELETED_INCLUDE
         return qs
 
     def only_deleted(self) -> "ArchiveQuerySet[T]":
         """アーカイブテーブルのみを対象にする。"""
         qs = self._clone()
-        qs._deleted_filter = _ONLY
+        qs._deleted_filter = DELETED_ONLY
         return qs
 
     # ── テーブル名・カラムリストヘルパー ───────────────────────
@@ -206,15 +192,15 @@ class ArchiveQuerySet(QuerySet[T]):
         return instance
 
     async def execute(self) -> list[Any]:
-        if self._deleted_filter == _EXCLUDE:
+        if self._deleted_filter == DELETED_EXCLUDE:
             return await super().execute()
 
-        if self._deleted_filter == _ONLY:
+        if self._deleted_filter == DELETED_ONLY:
             sql, params = self._build_archive_sql()
             rows = await self._engine._fetch(sql, params)
             return [self._hydrate_safe(row) for row in rows]
 
-        # _INCLUDE: UNION ALL
+        # DELETED_INCLUDE: UNION ALL
         # LIMIT/ORDER BY は UNION ALL の後に付ける必要があるため、
         # 各サブクエリからは除いて最終 SQL に追加する。
         saved_limit  = self._limit_val
@@ -246,20 +232,20 @@ class ArchiveQuerySet(QuerySet[T]):
         return [self._hydrate_safe(row) for row in rows]
 
     async def count(self) -> int:
-        if self._deleted_filter == _EXCLUDE:
+        if self._deleted_filter == DELETED_EXCLUDE:
             return await super().count()
 
-        if self._deleted_filter == _ONLY:
+        if self._deleted_filter == DELETED_ONLY:
             archive_sql, params = self._build_archive_sql()
             engine = self._engine
             sql = f"SELECT COUNT(*) AS cnt FROM ({archive_sql}) AS _sub"
             rows = await engine._fetch(sql, params)
             return rows[0]["cnt"] if rows else 0
 
-        # _INCLUDE: main + archive
+        # DELETED_INCLUDE: main + archive
         main_count    = await super().count()
         archive_qs    = self._clone()
-        archive_qs._deleted_filter = _ONLY
+        archive_qs._deleted_filter = DELETED_ONLY
         archive_count = await archive_qs.count()
         return main_count + archive_count
 
@@ -362,17 +348,12 @@ class ArchiveModel(Model):
         return f"{_ARCHIVE_PREFIX}{cls._meta.table_name}"
 
     # ── クラスメソッド: ArchiveQuerySet を返す ─────────────────
+    # get / where / first / last / get_or_none は Model 基底クラスの cls.all() ベース
+    # 実装を継承するため、ここでは all() と include_deleted/only_deleted のみ定義する。
 
     @classmethod
     def all(cls: Type[T]) -> ArchiveQuerySet[T]:
         return ArchiveQuerySet(cls)
-
-    @classmethod
-    def where(cls: Type[T], *clauses: Any) -> ArchiveQuerySet[T]:
-        qs = ArchiveQuerySet(cls)
-        for c in clauses:
-            qs = qs.where(c)
-        return qs
 
     @classmethod
     def include_deleted(cls: Type[T]) -> ArchiveQuerySet[T]:
@@ -383,33 +364,6 @@ class ArchiveModel(Model):
     def only_deleted(cls: Type[T]) -> ArchiveQuerySet[T]:
         """アーカイブテーブルのみを対象にしたクエリを開始する。"""
         return ArchiveQuerySet(cls).only_deleted()
-
-    @classmethod
-    async def get(cls: Type[T], *clauses: Any) -> T:
-        qs = ArchiveQuerySet(cls)
-        for c in clauses:
-            qs = qs.where(c)
-        results = await qs.limit(2).execute()
-        if not results:
-            raise cls.NotFound(f"{cls.__name__} not found")
-        if len(results) > 1:
-            raise cls.MultipleResults(f"Multiple {cls.__name__} found")
-        return results[0]
-
-    @classmethod
-    async def first(cls: Type[T]) -> "T | None":
-        return await ArchiveQuerySet(cls).first()
-
-    @classmethod
-    async def last(cls: Type[T]) -> "T | None":
-        return await ArchiveQuerySet(cls).last()
-
-    @classmethod
-    async def get_or_none(cls: Type[T], *clauses: Any) -> "T | None":
-        try:
-            return await cls.get(*clauses)
-        except cls.NotFound:
-            return None
 
     # ── インスタンスメソッド ──────────────────────────────────
 

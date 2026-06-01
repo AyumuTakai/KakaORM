@@ -224,8 +224,7 @@ class Model(metaclass=AsyncORMMeta):
 
     @classmethod
     def where(cls: Type[T], *clauses: WhereClause) -> "QuerySet[T]":
-        from kakaorm.query import QuerySet
-        qs = QuerySet(cls)
+        qs = cls.all()
         for c in clauses:
             qs = qs.where(c)
         return qs
@@ -238,8 +237,7 @@ class Model(metaclass=AsyncORMMeta):
     @classmethod
     async def get(cls: Type[T], *clauses: WhereClause) -> T:
         """条件に一致する 1 件を返す。0 件は NotFound、複数件は MultipleResults を送出。"""
-        from kakaorm.query import QuerySet
-        qs = QuerySet(cls)
+        qs = cls.all()
         for c in clauses:
             qs = qs.where(c)
         results = await qs.limit(2).execute()
@@ -251,13 +249,11 @@ class Model(metaclass=AsyncORMMeta):
 
     @classmethod
     async def first(cls: Type[T]) -> "T | None":
-        from kakaorm.query import QuerySet
-        return await QuerySet(cls).first()
+        return await cls.all().first()
 
     @classmethod
     async def last(cls: Type[T]) -> "T | None":
-        from kakaorm.query import QuerySet
-        return await QuerySet(cls).last()
+        return await cls.all().last()
 
     @classmethod
     async def get_or_none(cls: Type[T], *clauses: WhereClause) -> "T | None":

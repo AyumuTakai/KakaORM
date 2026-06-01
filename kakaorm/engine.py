@@ -446,10 +446,12 @@ class AsyncpgEngine(Engine):
             for col_name in cols
         ]
 
+        table = self.quote_identifier(meta.table_name)
+        cols_quoted = [self.quote_identifier(c) for c in cols]
         if is_auto:
             sql = (
-                f"INSERT INTO {meta.table_name} ({', '.join(cols)})"
-                f" VALUES {', '.join(row_phs)} RETURNING {pk_name}"
+                f"INSERT INTO {table} ({', '.join(cols_quoted)})"
+                f" VALUES {', '.join(row_phs)} RETURNING {self.quote_identifier(pk_name)}"
             )
             conn = _tx_conn.get()
             if conn:
@@ -461,7 +463,7 @@ class AsyncpgEngine(Engine):
                 inst._data[pk_name] = row[pk_name]
         else:
             sql = (
-                f"INSERT INTO {meta.table_name} ({', '.join(cols)})"
+                f"INSERT INTO {table} ({', '.join(cols_quoted)})"
                 f" VALUES {', '.join(row_phs)}"
             )
             conn = _tx_conn.get()
@@ -580,9 +582,11 @@ class AioSQLiteEngine(Engine):
                 for inst in batch
                 for col_name in cols
             ]
+            table = self.quote_identifier(meta.table_name)
+            cols_quoted = [self.quote_identifier(c) for c in cols]
             row_ph = "(" + ", ".join("?" * len(cols)) + ")"
             sql = (
-                f"INSERT INTO {meta.table_name} ({', '.join(cols)})"
+                f"INSERT INTO {table} ({', '.join(cols_quoted)})"
                 f" VALUES {', '.join([row_ph] * len(batch))}"
             )
             async with self._conn.execute(sql, all_params) as cursor:
@@ -618,16 +622,17 @@ class AioSQLiteEngine(Engine):
         """SQLite 用: CASCADE は未サポートのため無視する。"""
         meta = model_cls._meta
         exists = "IF EXISTS " if if_exists else ""
-        await self._execute(f"DROP TABLE {exists}{meta.table_name}", [])
+        await self._execute(f"DROP TABLE {exists}{self.quote_identifier(meta.table_name)}", [])
 
     async def truncate(self, model_cls: Any, *, restart_identity: bool = True) -> None:
         """SQLite 用: DELETE FROM で全行削除し、sqlite_sequence でリセット。"""
-        table = model_cls._meta.table_name
-        await self._execute(f"DELETE FROM {table}", [])
+        raw_name = model_cls._meta.table_name
+        await self._execute(f"DELETE FROM {self.quote_identifier(raw_name)}", [])
         if restart_identity:
             try:
+                # sqlite_sequence.name は非クォートの生テーブル名で格納されている
                 await self._execute(
-                    "DELETE FROM sqlite_sequence WHERE name = %s", [table]
+                    "DELETE FROM sqlite_sequence WHERE name = %s", [raw_name]
                 )
             except Exception:
                 pass
@@ -797,7 +802,7 @@ class AioMySQLEngine(Engine):
 
     async def truncate(self, model_cls: Any, *, restart_identity: bool = True) -> None:
         """MySQL 用: TRUNCATE TABLE は常に AUTO_INCREMENT をリセットする。"""
-        table = model_cls._meta.table_name
+        table = self.quote_identifier(model_cls._meta.table_name)
         await self._execute(f"TRUNCATE TABLE {table}", [])
 
 

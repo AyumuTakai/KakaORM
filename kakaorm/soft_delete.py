@@ -23,7 +23,6 @@ SELECT は デフォルトで deleted_at IS NULL のみ対象にする。
 
 from __future__ import annotations
 
-import copy
 from datetime import datetime, timezone
 from typing import Any, Type, TypeVar
 
@@ -34,9 +33,10 @@ from kakaorm.query import QuerySet
 
 T = TypeVar("T", bound="SoftDeleteModel")
 
-_EXCLUDE = "exclude"
-_INCLUDE = "include"
-_ONLY    = "only"
+# 削除フィルタモード（archive.py も共用する）
+DELETED_EXCLUDE = "exclude"
+DELETED_INCLUDE = "include"
+DELETED_ONLY    = "only"
 
 
 class SoftDeleteQuerySet(QuerySet[T]):
@@ -49,79 +49,46 @@ class SoftDeleteQuerySet(QuerySet[T]):
 
     def __init__(self, model: Type[T]) -> None:
         super().__init__(model)
-        self._deleted_filter: str = _EXCLUDE
+        self._deleted_filter: str = DELETED_EXCLUDE
 
-    def _clone(self) -> "SoftDeleteQuerySet[T]":
-        new = SoftDeleteQuerySet(self._model)
-        new._where          = list(self._where)
-        new._order_by       = list(self._order_by)
-        new._limit_val      = self._limit_val
-        new._offset_val     = self._offset_val
-        new._select_cols    = copy.copy(self._select_cols)
-        new._group_by       = list(self._group_by)
-        new._having         = list(self._having)
-        new._joins          = list(self._joins)
-        new._ctes           = list(self._ctes)
-        new._prefetch_names = list(self._prefetch_names)
-        new._deleted_filter = self._deleted_filter
-        return new
+    # ── _clone サポート ────────────────────────────────────────
+
+    def _copy_state_to(self, target: "QuerySet[T]") -> None:
+        super()._copy_state_to(target)
+        # SoftDeleteQuerySet 固有フィールドをコピー
+        if isinstance(target, SoftDeleteQuerySet):
+            target._deleted_filter = self._deleted_filter
+
+    # ── _effective_where フック ───────────────────────────────
+
+    def _effective_where(self) -> list[WhereClause]:
+        """soft delete フィルタを前置した WHERE 句を返す。"""
+        return self._soft_delete_clauses() + list(self._where)
+
+    # ── フィルタ切り替え ──────────────────────────────────────
 
     def include_deleted(self) -> "SoftDeleteQuerySet[T]":
         """削除済みレコードも含めて取得する。"""
         qs = self._clone()
-        qs._deleted_filter = _INCLUDE
+        qs._deleted_filter = DELETED_INCLUDE
         return qs
 
     def only_deleted(self) -> "SoftDeleteQuerySet[T]":
         """削除済みレコードのみを対象にする。"""
         qs = self._clone()
-        qs._deleted_filter = _ONLY
+        qs._deleted_filter = DELETED_ONLY
         return qs
 
     def _soft_delete_clauses(self) -> list[WhereClause]:
         """_deleted_filter に応じた追加 WHERE 句を返す。"""
         table = self._model._meta.table_name
-        if self._deleted_filter == _EXCLUDE:
+        if self._deleted_filter == DELETED_EXCLUDE:
             return [WhereClause(f"{table}.deleted_at IS NULL", [])]
-        if self._deleted_filter == _ONLY:
+        if self._deleted_filter == DELETED_ONLY:
             return [WhereClause(f"{table}.deleted_at IS NOT NULL", [])]
-        return []
+        return []  # DELETED_INCLUDE: フィルタなし
 
-    def _build_sql(self) -> tuple[str, list[Any]]:
-        extra = self._soft_delete_clauses()
-        saved = self._where
-        self._where = extra + list(saved)
-        try:
-            return super()._build_sql()
-        finally:
-            self._where = saved
-
-    async def count(self) -> int:
-        extra = self._soft_delete_clauses()
-        saved = self._where
-        self._where = extra + list(saved)
-        try:
-            return await super().count()
-        finally:
-            self._where = saved
-
-    async def aggregate(self, **agg_exprs: Any) -> dict[str, Any]:
-        extra = self._soft_delete_clauses()
-        saved = self._where
-        self._where = extra + list(saved)
-        try:
-            return await super().aggregate(**agg_exprs)
-        finally:
-            self._where = saved
-
-    async def update(self, **values: Any) -> int:
-        extra = self._soft_delete_clauses()
-        saved = self._where
-        self._where = extra + list(saved)
-        try:
-            return await super().update(**values)
-        finally:
-            self._where = saved
+    # ── カスタム実行メソッド ──────────────────────────────────
 
     async def delete(self) -> int:
         """論理削除: マッチするレコードの deleted_at に現在時刻をセット。"""
@@ -130,7 +97,7 @@ class SoftDeleteQuerySet(QuerySet[T]):
     async def restore(self) -> int:
         """論理削除を取り消す: deleted_at を NULL に戻す。"""
         saved = self._deleted_filter
-        self._deleted_filter = _ONLY
+        self._deleted_filter = DELETED_ONLY
         try:
             return await self.update(deleted_at=None)
         finally:
@@ -138,13 +105,7 @@ class SoftDeleteQuerySet(QuerySet[T]):
 
     async def purge(self) -> int:
         """物理削除: マッチするレコードを DB から完全に削除する。"""
-        extra = self._soft_delete_clauses()
-        saved = self._where
-        self._where = extra + list(saved)
-        try:
-            return await super().delete()
-        finally:
-            self._where = saved
+        return await super().delete()
 
 
 class SoftDeleteModel(Model):
@@ -157,6 +118,8 @@ class SoftDeleteModel(Model):
 
     QuerySet エントリポイント（``all()`` / ``where()`` / ``get()`` 等）は
     デフォルトで ``deleted_at IS NULL`` フィルタを自動付与する。
+    ``Model.get/first/last/get_or_none/where`` は ``cls.all()`` を呼ぶため、
+    サブクラスで ``all()`` を override するだけでフィルタが自動適用される。
     """
 
     deleted_at = DateTimeColumn(nullable=True)
@@ -168,13 +131,6 @@ class SoftDeleteModel(Model):
         return SoftDeleteQuerySet(cls)
 
     @classmethod
-    def where(cls: Type[T], *clauses: Any) -> SoftDeleteQuerySet[T]:
-        qs = SoftDeleteQuerySet(cls)
-        for c in clauses:
-            qs = qs.where(c)
-        return qs
-
-    @classmethod
     def include_deleted(cls: Type[T]) -> SoftDeleteQuerySet[T]:
         """削除済みレコードも含めたクエリを開始する。"""
         return SoftDeleteQuerySet(cls).include_deleted()
@@ -183,33 +139,6 @@ class SoftDeleteModel(Model):
     def only_deleted(cls: Type[T]) -> SoftDeleteQuerySet[T]:
         """削除済みレコードのみを対象にしたクエリを開始する。"""
         return SoftDeleteQuerySet(cls).only_deleted()
-
-    @classmethod
-    async def get(cls: Type[T], *clauses: Any) -> T:
-        qs = SoftDeleteQuerySet(cls)
-        for c in clauses:
-            qs = qs.where(c)
-        results = await qs.limit(2).execute()
-        if not results:
-            raise cls.NotFound(f"{cls.__name__} not found")
-        if len(results) > 1:
-            raise cls.MultipleResults(f"Multiple {cls.__name__} found")
-        return results[0]
-
-    @classmethod
-    async def first(cls: Type[T]) -> "T | None":
-        return await SoftDeleteQuerySet(cls).first()
-
-    @classmethod
-    async def last(cls: Type[T]) -> "T | None":
-        return await SoftDeleteQuerySet(cls).last()
-
-    @classmethod
-    async def get_or_none(cls: Type[T], *clauses: Any) -> "T | None":
-        try:
-            return await cls.get(*clauses)
-        except cls.NotFound:
-            return None
 
     # ── インスタンスメソッド ──────────────────────────────────
 

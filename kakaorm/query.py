@@ -90,19 +90,28 @@ class QuerySet(Generic[T]):
         self._ctes: list[tuple[str, "QuerySet"]] = []          # WITH 句
         self._prefetch_names: list[str] = []                    # Eager loading
 
+    def _copy_state_to(self, target: "QuerySet[T]") -> None:
+        """すべての状態をコピーする。サブクラスは super() 呼び出し後に固有フィールドを追加。"""
+        target._where          = list(self._where)
+        target._order_by       = list(self._order_by)
+        target._limit_val      = self._limit_val
+        target._offset_val     = self._offset_val
+        target._select_cols    = copy.copy(self._select_cols)
+        target._group_by       = list(self._group_by)
+        target._having         = list(self._having)
+        target._joins          = list(self._joins)
+        target._ctes           = list(self._ctes)
+        target._prefetch_names = list(self._prefetch_names)
+
     def _clone(self) -> "QuerySet[T]":
-        new = QuerySet(self._model)
-        new._where          = list(self._where)
-        new._order_by       = list(self._order_by)
-        new._limit_val      = self._limit_val
-        new._offset_val     = self._offset_val
-        new._select_cols    = copy.copy(self._select_cols)
-        new._group_by       = list(self._group_by)
-        new._having         = list(self._having)
-        new._joins          = list(self._joins)
-        new._ctes           = list(self._ctes)
-        new._prefetch_names = list(self._prefetch_names)
+        """サブクラスの型を保持したまま状態をコピーする。"""
+        new = self.__class__(self._model)
+        self._copy_state_to(new)
         return new
+
+    def _effective_where(self) -> list["WhereClause"]:
+        """実際の WHERE 句リストを返す。サブクラスで追加条件を注入できる。"""
+        return self._where
 
     @property
     def _engine(self) -> Any:
@@ -323,7 +332,7 @@ class QuerySet(Generic[T]):
             sql += f" {j.join_type} JOIN {join_table} ON {j.on_sql}"
 
         # WHERE / GROUP BY / HAVING / ORDER BY / LIMIT / OFFSET
-        where_sql, where_params = self._merge_clauses(self._where, "WHERE")
+        where_sql, where_params = self._merge_clauses(self._effective_where(), "WHERE")
         sql += where_sql
         params.extend(where_params)
 
@@ -498,7 +507,7 @@ class QuerySet(Generic[T]):
         # テーブル名をDB方言に応じてクォート
         if self._model._engine:
             table = self._model._engine.quote_identifier(table)
-        where_sql, params = self._merge_clauses(self._where, "WHERE")
+        where_sql, params = self._merge_clauses(self._effective_where(), "WHERE")
         sql = f"SELECT COUNT(*) AS cnt FROM {table}{where_sql}"
         rows = await self._engine._fetch(sql, params)
         return rows[0]["cnt"] if rows else 0
@@ -521,7 +530,7 @@ class QuerySet(Generic[T]):
             f"{agg._having_expr()} AS {alias}"
             for alias, agg in agg_exprs.items()
         ]
-        where_sql, params = self._merge_clauses(self._where, "WHERE")
+        where_sql, params = self._merge_clauses(self._effective_where(), "WHERE")
         sql = f"SELECT {', '.join(select_parts)} FROM {table}{where_sql}"
         rows = await self._engine._fetch(sql, params)
         return dict(rows[0]) if rows else {alias: None for alias in agg_exprs}
@@ -567,7 +576,7 @@ class QuerySet(Generic[T]):
         # テーブル名をDB方言に応じてクォート
         if self._model._engine:
             table = self._model._engine.quote_identifier(table)
-        where_sql, params = self._merge_clauses(self._where, "WHERE")
+        where_sql, params = self._merge_clauses(self._effective_where(), "WHERE")
         sql = f"DELETE FROM {table}{where_sql}"
         return await self._engine._execute(sql, params)
 
@@ -606,7 +615,7 @@ class QuerySet(Generic[T]):
             else:
                 set_parts.append(f"{k} = %s")
                 params.append(v)
-        where_sql, where_params = self._merge_clauses(self._where, "WHERE")
+        where_sql, where_params = self._merge_clauses(self._effective_where(), "WHERE")
         sql = f"UPDATE {table} SET {', '.join(set_parts)}{where_sql}"
         params.extend(where_params)
         return await self._engine._execute(sql, params)
@@ -672,7 +681,7 @@ class QuerySet(Generic[T]):
             join_table = j.model._meta.table_name
             sql += f" {j.join_type} JOIN {join_table} ON {j.on_sql}"
 
-        where_sql, where_params = self._merge_clauses(self._where, "WHERE")
+        where_sql, where_params = self._merge_clauses(self._effective_where(), "WHERE")
         sql += where_sql
         params.extend(where_params)
 
