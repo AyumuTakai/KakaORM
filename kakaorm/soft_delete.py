@@ -24,7 +24,7 @@ SELECT は デフォルトで deleted_at IS NULL のみ対象にする。
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Type, TypeVar
+from typing import Type, TypeVar
 
 from kakaorm.columns.base import WhereClause
 from kakaorm.columns.types import DateTimeColumn
