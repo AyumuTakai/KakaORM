@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-06-02
+
+### Added
+
+- **`Model.find(pk)`** — Shorthand for PK lookup. Returns `None` if not found, equivalent to `get_or_none(Model.id == pk)`. Works with any PK type (integer or string custom PK).
+- **`Migrator.run(models)`** — Convenience method that runs `plan()` + `apply()` in a single call. No-ops when the schema is already up to date.
+
+### Changed
+
+- **`connect()` missing-`await` warning** — `kakaorm.connect()` is now a regular function returning a `_ConnectAwaitable`. Forgetting `await` no longer silently discards the coroutine; a `RuntimeWarning` is raised at GC time with the message `"called without 'await' and had no effect. Fix: engine = await kakaorm.connect(url)"`.
+
 ## [0.4.1] - 2026-06-02
 
 ### Security
@@ -121,6 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Migrator.plan()` expands `ArchiveModel` subclasses to also plan their corresponding archive tables
 
+[0.4.2]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.4.2
 [0.4.1]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.4.1
 [0.4.0]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.4.0
 [0.3.4]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.3.4

@@ -11,6 +11,22 @@ from conftest import Author, Post
 
 
 class TestMigrator:
+    async def test_run_applies_missing_tables(self, engine):
+        class RunTable(Model):
+            label = StrColumn(nullable=False)
+            class Meta:
+                table_name = "run_table"
+
+        plan = await Migrator(engine).run([RunTable])
+        assert not plan.is_empty()
+        # Running again returns an empty plan (idempotent)
+        plan2 = await Migrator(engine).run([RunTable])
+        assert plan2.is_empty()
+
+    async def test_run_returns_empty_plan_when_no_diff(self, engine):
+        plan = await Migrator(engine).run([Author, Post])
+        assert plan.is_empty()
+
     async def test_plan_empty_when_tables_exist(self, engine):
         migrator = Migrator(engine)
         plan = await migrator.plan([Author, Post])

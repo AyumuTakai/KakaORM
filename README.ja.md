@@ -14,7 +14,7 @@ Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `p
 - **完全非同期** — `async/await` ベースの API。`asyncio` と自然に統合
 - **型安全なクエリ** — `User.age >= 20` のような演算子オーバーロードで文字列なしにクエリを構築
 - **複数 DB 対応** — PostgreSQL (asyncpg / psycopg3)・SQLite (aiosqlite)・MySQL/MariaDB (aiomysql) をサポート
-- **自動マイグレーション** — モデルと DB スキーマの差分を検出して ALTER TABLE を生成
+- **自動マイグレーション** — モデルと DB スキーマの差分を検出して ALTER TABLE を生成。`Migrator.run(models)` で差分の確認と適用を1行で実行できる
 - **Generic デスクリプタ** — `Column[T]` による型アノテーション推論。IDE の補完が正しく動作
 - **イベントフック** — `before_insert` / `after_update` などを Model に定義するだけで動作
 - **リレーション定義** — `has_many()` / `has_one()` / `belongs_to()` で FK ナビゲーション（前向き・逆参照）を宣言的に記述
@@ -176,7 +176,10 @@ authors = await Author.all()
 # 1件 (見つからなければ NotFound 例外)
 author = await Author.get(Author.email == "alice@example.com")
 
-# 1件 (見つからなければ None)
+# PK で1件取得 (見つからなければ None)
+author = await Author.find(1)
+
+# 条件で1件取得 (見つからなければ None)
 author = await Author.get_or_none(Author.id == 1)
 
 # 先頭 / 末尾
@@ -262,7 +265,7 @@ await Post.truncate()
 ## DB 接続
 
 ```python
-# SQLite (開発・テスト)
+# 必ず await を付けること。省略すると修正方法を示す RuntimeWarning が発行される
 engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
 engine = await kakaorm.connect("sqlite+aiosqlite:///./dev.db")
 
@@ -278,6 +281,21 @@ engine = await kakaorm.connect("mysql+aiomysql://user:password@localhost:3306/db
 # コンテキストマネージャとしても使用可能
 async with await kakaorm.connect("sqlite+aiosqlite:///:memory:") as engine:
     ...
+```
+
+## マイグレーション
+
+```python
+from kakaorm.migration import Migrator
+
+# 差分の確認と適用を1行で実行（差分がなければ何もしない）
+await Migrator(engine).run([Author, Post])
+
+# 詳細を制御したい場合は2ステップで記述することもできる
+migrator = Migrator(engine)
+plan = await migrator.plan([Author, Post])
+if not plan.is_empty():
+    await plan.apply()
 ```
 
 ## フレームワーク連携
@@ -319,6 +337,9 @@ kakaorm/
 │   ├── blog_example.py      # ブログシステムの使用例
 │   ├── fastapi_todo.py      # FastAPI TODO リスト API
 │   └── flask_todo.py        # Flask TODO リスト API
+│
+│   大規模なサンプルアプリは別リポジトリで管理しています:
+│   → https://github.com/AyumuTakai/kakaorm-samples
 ├── tests/
 │   ├── conftest.py
 │   ├── test_crud.py

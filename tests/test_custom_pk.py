@@ -75,6 +75,16 @@ class TestCustomStringPK:
         assert last is not None
         assert last.code == "ZZ"
 
+    async def test_find_with_string_pk(self, engine):
+        await Country.create(code="CA", name="Canada")
+        result = await Country.find("CA")
+        assert result is not None
+        assert result.name == "Canada"
+
+    async def test_find_returns_none_for_missing_string_pk(self, engine):
+        result = await Country.find("XX")
+        assert result is None
+
 
 class TestCustomIntPK:
     async def test_create_with_explicit_int_pk(self, engine):

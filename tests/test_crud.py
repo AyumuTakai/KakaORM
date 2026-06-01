@@ -43,6 +43,17 @@ class TestGet:
         assert result is not None
         assert result.name == "Dave"
 
+    async def test_find_returns_instance(self, engine):
+        author = await Author.create(name="Eve", email="eve@example.com")
+        result = await Author.find(author.id)
+        assert result is not None
+        assert result.id == author.id
+        assert result.name == "Eve"
+
+    async def test_find_returns_none_for_missing_pk(self, engine):
+        result = await Author.find(99999)
+        assert result is None
+
     async def test_first(self, engine):
         await Author.create(name="E1", email="e1@example.com")
         await Author.create(name="E2", email="e2@example.com")

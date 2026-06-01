@@ -264,6 +264,22 @@ class Model(metaclass=AsyncORMMeta):
             return None
 
     @classmethod
+    async def find(cls: Type[T], pk: Any) -> "T | None":
+        """
+        PK 値で 1 件を検索し、存在しなければ None を返す。
+
+        ``get_or_none(Model.id == pk)`` の短縮形。任意の PK カラム名に対応する。
+
+        例::
+
+            user = await User.find(1)
+            if user is None:
+                raise HTTPException(status_code=404)
+        """
+        pk_col = getattr(cls, cls._meta.pk_name)
+        return await cls.get_or_none(pk_col == pk)
+
+    @classmethod
     async def create(cls: Type[T], **kwargs: Any) -> T:
         """インスタンスを作成して即 INSERT し、DB 生成の値 (id等) を返す。"""
         instance = cls(**kwargs)

@@ -174,6 +174,25 @@ class Migrator:
 
         return plan
 
+    async def run(self, models: list[Type[Any]]) -> MigrationPlan:
+        """
+        モデルリストのスキーマ差分を計算し、差分がある場合のみ適用する。
+
+        ``plan()`` → ``apply()`` の定型パターンを 1 行で書けるショートハンド。
+
+        例::
+
+            migrator = Migrator(engine)
+            await migrator.run([Group, Contact])
+
+        :param models: マイグレーション対象のモデルクラスリスト。
+        :returns:      実行した :class:`MigrationPlan`。差分なしの場合も返す。
+        """
+        plan = await self.plan(models)
+        if not plan.is_empty():
+            await plan.apply()
+        return plan
+
     async def plan_with_drop(self, models: list[Type[Any]]) -> MigrationPlan:
         """allow_drop=True: 不要カラムも DROP する破壊的プランを返す。"""
         base_plan = await self.plan(models)

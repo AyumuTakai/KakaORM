@@ -950,17 +950,8 @@ class Psycopg3Engine(Engine):
 
 # ── ファクトリ関数 ────────────────────────────────────────────
 
-async def connect(url: str, **kwargs: Any) -> Engine:
-    """
-    接続 URL から適切な Engine を選択して初期化する。
-
-    URL 形式:
-        postgresql+asyncpg://user:pw@host/db
-        postgresql+psycopg3://user:pw@host/db
-        sqlite+aiosqlite:///./path/to/db.sqlite
-        sqlite+aiosqlite:///:memory:
-        mysql+aiomysql://user:pw@host:3306/db
-    """
+async def _connect_impl(url: str, **kwargs: Any) -> Engine:
+    """connect() の実装本体。直接呼ばず connect() 経由で使う。"""
     from kakaorm.model import Model
 
     parsed = urlparse(url)
@@ -994,6 +985,63 @@ async def connect(url: str, **kwargs: Any) -> Engine:
     await engine.connect()
     _register_engine(Model, engine)
     return engine
+
+
+class _ConnectAwaitable:
+    """
+    connect() が返すカスタム awaitable。
+
+    ``await`` を付け忘れた場合に、Python 標準の
+    ``RuntimeWarning: coroutine 'connect' was never awaited``
+    より分かりやすいエラーメッセージを表示する。
+
+    正しい使い方::
+
+        engine = await kakaorm.connect(url)
+
+    ``await`` なしで呼んだ場合、オブジェクトがガベージコレクトされる際に
+    ``RuntimeWarning`` を発行して修正方法を案内する。
+    """
+
+    def __init__(self, url: str, kwargs: dict) -> None:
+        self._url = url
+        self._kwargs = kwargs
+        self._awaited = False
+
+    def __await__(self):
+        self._awaited = True
+        return _connect_impl(self._url, **self._kwargs).__await__()
+
+    def __del__(self) -> None:
+        if not self._awaited:
+            import warnings
+            warnings.warn(
+                f"kakaorm.connect({self._url!r}) was called without `await` and had no effect.\n"
+                "Fix: engine = await kakaorm.connect(url)",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+
+def connect(url: str, **kwargs: Any) -> "_ConnectAwaitable":
+    """
+    接続 URL から適切な Engine を選択して初期化する。
+
+    必ず ``await`` を付けて呼ぶこと::
+
+        engine = await kakaorm.connect(url)
+
+    ``await`` を省略した場合は、接続は行われず
+    ``RuntimeWarning`` で修正方法が案内される。
+
+    URL 形式:
+        postgresql+asyncpg://user:pw@host/db
+        postgresql+psycopg3://user:pw@host/db
+        sqlite+aiosqlite:///./path/to/db.sqlite
+        sqlite+aiosqlite:///:memory:
+        mysql+aiomysql://user:pw@host:3306/db
+    """
+    return _ConnectAwaitable(url, kwargs)
 
 
 def _register_engine(base_cls: Any, engine: Engine) -> None:

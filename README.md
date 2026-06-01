@@ -14,7 +14,7 @@ An async-native ORM for Python. Supports PostgreSQL (`asyncpg` / `psycopg3`), SQ
 - **Fully async** — `async/await`-based API that integrates naturally with `asyncio`
 - **Type-safe queries** — Build queries without strings using operator overloading: `User.age >= 20`
 - **Multi-database** — Supports PostgreSQL (asyncpg / psycopg3), SQLite (aiosqlite), and MySQL/MariaDB (aiomysql)
-- **Auto migrations** — Detects diff between models and DB schema and generates `ALTER TABLE`
+- **Auto migrations** — Detects diff between models and DB schema and generates `ALTER TABLE`; `Migrator.run(models)` applies pending changes in one call
 - **Generic descriptors** — Type annotation inference via `Column[T]` for correct IDE completion
 - **Event hooks** — Define `before_insert` / `after_update` etc. directly on your Model
 - **Relation definitions** — Declare FK navigation (forward and reverse) with `has_many()` / `has_one()` / `belongs_to()`
@@ -176,7 +176,10 @@ authors = await Author.all()
 # Single record (raises NotFound if not found)
 author = await Author.get(Author.email == "alice@example.com")
 
-# Single record (returns None if not found)
+# Single record by primary key (returns None if not found)
+author = await Author.find(1)
+
+# Single record by condition (returns None if not found)
 author = await Author.get_or_none(Author.id == 1)
 
 # First / last
@@ -284,7 +287,7 @@ pip install fastapi uvicorn kakaorm aiomysql
 | MySQL / MariaDB | `mysql+aiomysql://user:password@localhost:3306/dbname` |
 
 ```python
-# SQLite (development / testing)
+# Always use await — omitting it raises a RuntimeWarning with a fix hint
 engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
 engine = await kakaorm.connect("sqlite+aiosqlite:///./dev.db")
 
@@ -300,6 +303,21 @@ engine = await kakaorm.connect("mysql+aiomysql://user:password@localhost:3306/db
 # Also usable as a context manager
 async with await kakaorm.connect("sqlite+aiosqlite:///:memory:") as engine:
     ...
+```
+
+## Migrations
+
+```python
+from kakaorm.migration import Migrator
+
+# Apply any pending schema changes in one call (no-op if schema is up to date)
+await Migrator(engine).run([Author, Post])
+
+# Or use the two-step API for more control
+migrator = Migrator(engine)
+plan = await migrator.plan([Author, Post])
+if not plan.is_empty():
+    await plan.apply()
 ```
 
 ## Framework Integration
@@ -341,6 +359,9 @@ kakaorm/
 │   ├── blog_example.py      # Blog system usage example
 │   ├── fastapi_todo.py      # FastAPI TODO list API
 │   └── flask_todo.py        # Flask TODO list API
+│
+│   Larger sample apps live in a separate repository:
+│   → https://github.com/AyumuTakai/kakaorm-samples
 ├── tests/
 │   ├── conftest.py
 │   ├── test_crud.py
