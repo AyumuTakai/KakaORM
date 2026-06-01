@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-01
+
+### Added
+
+- **Validation** — Column-level validators run automatically on `save()` before any DB write:
+  - Built-in validators: `min_length(n)`, `max_length(n)`, `min_value(n)`, `max_value(n)`, `regex(pattern)`, `one_of(*choices)`
+  - `ValidationError` collects all field errors in a single pass (`error.errors` dict)
+  - `Model.validate()` for manual validation without hitting the database
+  - Custom validators: any `(value) -> None` callable that raises `ValidationError`
+- **`get_or_create(defaults={}, **lookup)`** — return existing record or create; returns `(instance, created: bool)`
+- **`update_or_create(defaults={}, **lookup)`** — return existing record updated with `defaults`, or create; returns `(instance, created: bool)`
+- **`bulk_update(instances, fields=None, batch_size=500)`** — batch UPDATE for multiple instances; SQLite uses `executemany` for efficiency
+- **`Engine._bulk_update()` / `_update_fields()`** — underlying engine methods for partial-field updates
+- Expanded `docs/REFERENCE.md` and `docs/REFERENCE.ja.md`:
+  - Validation section with custom validator example
+  - Upsert section (`get_or_create` / `update_or_create`)
+  - Bulk Operations section (`bulk_create` + `bulk_update`)
+  - Window Functions practical patterns (top-N per group, moving average, period comparison)
+  - CTE practical patterns (top-N with CTE, subquery reuse, aggregate-then-filter)
+
+### Changed
+
+- `Column.__init__` accepts `validators` parameter (list of callables, default `[]`)
+- `Model.save()` now calls `validate()` before INSERT / UPDATE
+
 ## [0.3.4] - 2026-06-01
 
 ### Added
@@ -89,6 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Migrator.plan()` expands `ArchiveModel` subclasses to also plan their corresponding archive tables
 
+[0.4.0]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.4.0
 [0.3.4]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.3.4
 [0.3.3]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.3.3
 [0.3.2]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.3.2

@@ -23,6 +23,9 @@ Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `p
 - **マイグレーション autogenerate** — `autogenerate()` で差分ファイルを自動生成。`run_files()` + `downgrade()` でファイルベースの管理が可能
 - **CTE（WITH 句）** — `with_cte(name, queryset)` で複雑なクエリを構造化
 - **削除戦略** — `SoftDeleteModel`（論理削除）・`ArchiveModel`（アーカイブ削除）の基底クラスを提供。継承するだけで `delete()` の挙動を切り替えられる
+- **バリデーション** — カラムにバリデータを付与（`min_length`・`max_length`・`min_value`・`max_value`・`regex`・`one_of`）。`save()` が DB 書き込み前に自動検証し、失敗時は `ValidationError` を送出
+- **Upsert** — `get_or_create()` / `update_or_create()` が `(instance, created: bool)` を返す
+- **一括 UPDATE** — `bulk_update(instances, fields=[...])` で多数のインスタンスを `executemany` 1 回でフラッシュ
 
 ## インストール
 
@@ -198,6 +201,44 @@ await author.save()
 await author.delete()
 ```
 
+### バリデーション
+
+```python
+from kakaorm.validators import min_length, max_length, min_value, regex
+
+class User(Model):
+    name  = StrColumn(nullable=False, validators=[min_length(2), max_length(50)])
+    age   = IntColumn(nullable=True,  validators=[min_value(0)])
+    email = StrColumn(nullable=False, validators=[
+        regex(r"^[^@]+@[^@]+\.[^@]+$", message="有効なメールアドレスを入力してください。")
+    ])
+
+    class Meta:
+        table_name = "user"
+
+try:
+    await User.create(name="A", age=-1, email="bad")
+except ValidationError as e:
+    print(e.errors)
+    # {"name": ["..."], "age": ["..."], "email": ["..."]}
+```
+
+### Upsert
+
+```python
+# get_or_create — 検索または作成。(instance, created: bool) を返す
+author, created = await Author.get_or_create(
+    email="alice@example.com",
+    defaults={"name": "Alice"},
+)
+
+# update_or_create — 検索して更新、またはなければ作成
+post, created = await Post.update_or_create(
+    slug="hello-world",
+    defaults={"title": "Hello World", "published": True},
+)
+```
+
 ### 一括操作
 
 ```python
@@ -205,10 +246,13 @@ await author.delete()
 posts = [Post(title=f"記事{i}", views=0) for i in range(1000)]
 await Post.bulk_create(posts)
 
-# 一括 UPDATE
-await Post.where(Post.published == False).update(published=True)
+# 一括 UPDATE — 多数のインスタンスを executemany で一度にフラッシュ
+for post in posts:
+    post.views = 0
+await Post.bulk_update(posts, fields=["views"])
 
-# 一括 DELETE
+# QuerySet レベルの一括 UPDATE / DELETE
+await Post.where(Post.published == False).update(published=True)
 await Post.where(Post.views == 0).delete()
 
 # TRUNCATE (シーケンスもリセット)
@@ -261,6 +305,7 @@ kakaorm/
 │   ├── engine.py            # Engine 基底クラス + AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine, connect()
 │   ├── model.py             # Model 基底クラス, AsyncORMMeta メタクラス
 │   ├── query.py             # QuerySet (遅延クエリビルダ)
+│   ├── validators.py        # ValidationError + ビルトインバリデータ (min_length, max_length, …)
 │   ├── soft_delete.py       # SoftDeleteModel / SoftDeleteQuerySet (論理削除)
 │   ├── archive.py           # ArchiveModel / ArchiveQuerySet (アーカイブ削除)
 │   ├── relationship.py      # has_many / has_one / belongs_to デスクリプタ
@@ -281,6 +326,9 @@ kakaorm/
 │   ├── test_aggregates.py
 │   ├── test_transaction.py
 │   ├── test_bulk_create.py
+│   ├── test_bulk_update.py  # bulk_update()
+│   ├── test_validation.py   # カラムバリデータ + ValidationError
+│   ├── test_upsert.py       # get_or_create / update_or_create
 │   ├── test_raw_sql.py
 │   ├── test_migration.py
 │   ├── test_indexes.py      # 複合インデックス

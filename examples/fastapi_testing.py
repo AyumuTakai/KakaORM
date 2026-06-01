@@ -10,7 +10,7 @@ FastAPI + KakaORM テスト戦略
 - 関連データ（prefetch）のテスト
 
 実行:
-    pip install fastapi uvicorn "kakaorm[aiosqlite]" pytest pytest-asyncio httpx
+    pip install fastapi uvicorn "kakaorm[aiosqlite]" pytest pytest-asyncio httpx2
     pytest examples/fastapi_testing.py -v
 """
 
@@ -163,26 +163,33 @@ async def test_engine():
 
 
 @pytest.fixture
-def app(test_engine):
+def app():
     """FastAPI アプリケーション（同期版）"""
-    # Note: test_engine は async fixture だが、app は sync fixture
-    # これは pytest-asyncio の制限によるもの。実際には test_engine の event loop を使用
     import asyncio
-    loop = asyncio.get_event_loop()
-    engine = loop.run_until_complete(kakaorm.connect("sqlite+aiosqlite:///:memory:"))
-    loop.run_until_complete(Migrator(engine).plan([User, Post]).apply())
 
-    app = create_app(engine)
-    yield app
+    async def _setup():
+        engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
+        plan = await Migrator(engine).plan([User, Post])
+        if not plan.is_empty():
+            await plan.apply()
+        return engine
 
-    # クリーンアップ
+    loop = asyncio.new_event_loop()
+    engine = loop.run_until_complete(_setup())
+    application = create_app(engine)
+
+    yield application, loop, engine
+
     loop.run_until_complete(engine.disconnect())
+    loop.close()
 
 
 @pytest.fixture
 def client(app):
-    """FastAPI TestClient"""
-    return TestClient(app)
+    """FastAPI TestClient（lifespan 起動込み）"""
+    application, _loop, _engine = app
+    with TestClient(application) as c:
+        yield c
 
 
 # ============================================================================

@@ -28,6 +28,84 @@ DecimalColumn(max_digits=10, decimal_places=2)  # NUMERIC(10, 2)
 
 ---
 
+## Validation
+
+Attach validators to column definitions. `save()` runs them automatically before every INSERT or UPDATE. If any fail, `ValidationError` is raised and nothing is written to the database.
+
+```python
+from kakaorm import Model, StrColumn, IntColumn, ValidationError
+from kakaorm.validators import min_length, max_length, min_value, max_value, regex, one_of
+
+class User(Model):
+    name  = StrColumn(nullable=False, validators=[min_length(2), max_length(50)])
+    age   = IntColumn(nullable=True,  validators=[min_value(0), max_value(150)])
+    email = StrColumn(nullable=False, validators=[
+        regex(r"^[^@]+@[^@]+\.[^@]+$", message="Enter a valid email address.")
+    ])
+    role  = StrColumn(nullable=True,  validators=[one_of("admin", "user", "guest")])
+
+    class Meta:
+        table_name = "user"
+```
+
+### Catching errors
+
+`ValidationError.errors` is a `dict[str, list[str]]` keyed by field name:
+
+```python
+user = User(name="A", age=-5, email="bad")
+try:
+    await user.save()
+except ValidationError as e:
+    print(e.errors)
+    # {
+    #   "name":  ["Ensure this value has at least 2 characters."],
+    #   "age":   ["Enter a value greater than or equal to 0."],
+    #   "email": ["Enter a valid email address."],
+    # }
+```
+
+All field errors are collected in a single pass — you get the full picture in one exception.
+
+### Manual validation
+
+Call `validate()` directly without hitting the database:
+
+```python
+user = User(name="Alice", age=30, email="alice@example.com")
+user.validate()  # raises ValidationError immediately if anything is wrong
+```
+
+### Built-in validators
+
+| Validator | Checks |
+|---|---|
+| `min_length(n)` | `len(value) >= n` |
+| `max_length(n)` | `len(value) <= n` |
+| `min_value(n)` | `value >= n` |
+| `max_value(n)` | `value <= n` |
+| `regex(pattern, message=None)` | `re.search(pattern, value)` |
+| `one_of(*choices)` | `value in choices` |
+
+All built-in validators silently skip `None` values (use `nullable=False` for presence checks).
+
+### Custom validators
+
+Any callable `(value: Any) -> None` works as a validator — raise `ValidationError` on failure:
+
+```python
+from kakaorm.validators import ValidationError
+
+def no_spaces(value):
+    if value and " " in value:
+        raise ValidationError("Username must not contain spaces.")
+
+class User(Model):
+    username = StrColumn(nullable=False, validators=[no_spaces])
+```
+
+---
+
 ## Event Hooks
 
 Insert custom logic before/after `save()` / `delete()` by overriding methods on your Model subclass.
@@ -521,7 +599,62 @@ Available window function classes:
 
 > **Note** Window functions are not supported by SQLite. Use PostgreSQL, MySQL 8.0+, or MariaDB 10.2+.
 
+#### Practical patterns
+
+**Top-N per group** — retrieve the top 3 posts by views for each author:
+
+```python
+from kakaorm import RowNumber
+
+# Step 1: annotate each post with its rank within its author's posts
+ranked = await Post.all().select(
+    Post.id,
+    Post.title,
+    Post.author_id,
+    Post.views,
+    RowNumber().over(
+        partition_by=[Post.author_id],
+        order_by=[Post.views.desc],   # highest views = rank 1
+    ).label("rn"),
+)
+
+# Step 2: filter to top 3 in Python (or wrap in a CTE — see below)
+top3 = [r for r in ranked if r["rn"] <= 3]
+```
+
+**Moving average** — 7-day rolling average of daily sales:
+
+```python
+from kakaorm import Avg
+
+rows = await Sale.all().select(
+    Sale.date,
+    Sale.amount,
+    Avg(Sale.amount).over(
+        order_by=[Sale.date],
+    ).label("moving_avg"),
+).order_by(Sale.date)
+```
+
+**Period-over-period comparison** — compare each month's revenue against the previous month:
+
+```python
+from kakaorm import Lag, Sum
+
+rows = await MonthlyRevenue.all().select(
+    MonthlyRevenue.month,
+    MonthlyRevenue.revenue,
+    Lag(MonthlyRevenue.revenue, 1, 0).over(
+        order_by=[MonthlyRevenue.month],
+    ).label("prev_revenue"),
+).order_by(MonthlyRevenue.month)
+
+# revenue - prev_revenue gives the month-over-month delta
+```
+
 ### CTE (WITH clause)
+
+CTEs let you name a subquery and reference it in the main query, improving readability and enabling multi-step transformations.
 
 ```python
 # Define high-earning departments as a CTE, then JOIN
@@ -535,6 +668,75 @@ rows = await (
               .join(Employee, on=Employee.dept_id == Department.id)
               .select(Department.name, Employee.name)
               .where(Employee.salary >= 1000)
+)
+```
+
+#### Practical patterns
+
+**Top-N per group with CTE** — combine a window function CTE with a filter:
+
+```python
+from kakaorm import RowNumber
+
+# CTE: rank posts within each author
+ranked_posts = Post.all().select(
+    Post.id,
+    Post.title,
+    Post.author_id,
+    Post.views,
+    RowNumber().over(
+        partition_by=[Post.author_id],
+        order_by=[Post.views.desc],
+    ).label("rn"),
+)
+
+# Main query: only rows where rank <= 3
+# (filter applied after the CTE is materialised by the DB)
+top3 = await (
+    Post.all()
+        .with_cte("ranked", ranked_posts)
+        .join_raw("ranked", on="post.id = ranked.id")
+        .select(Post.title, Post.author_id, Post.views)
+        .where_raw("ranked.rn <= 3")
+)
+```
+
+**Reusing a subquery** — reference an expensive subquery in multiple places:
+
+```python
+# Compute active user IDs once
+active_users = User.where(User.is_active == True).select(User.id)
+
+# Reuse the CTE in multiple joins or filters
+results = await (
+    Order.all()
+         .with_cte("actives", active_users)
+         .join_raw("actives", on="order.user_id = actives.id")
+         .select(Order.id, Order.total)
+         .order_by(Order.total.desc)
+         .limit(100)
+)
+```
+
+**Aggregate then filter** — sum orders per user and keep only high-value customers:
+
+```python
+from kakaorm import Sum
+
+# CTE: total spend per user
+user_totals = (
+    Order.all()
+         .select(Order.user_id, Sum(Order.total).label("total_spend"))
+         .group_by(Order.user_id)
+)
+
+# Main query: join back to get user names
+vip_customers = await (
+    User.all()
+        .with_cte("totals", user_totals)
+        .join_raw("totals", on="user.id = totals.user_id")
+        .select(User.name, User.email)
+        .where_raw("totals.total_spend >= 10000")
 )
 ```
 
@@ -586,6 +788,147 @@ await (
     Employee.where(Employee.hire_year <= 1993)
         .insert_into(Archive, emp_id=Employee.id, year=Employee.hire_year)
 )
+```
+
+---
+
+## Upsert — `get_or_create` / `update_or_create`
+
+Both methods take keyword arguments as lookup conditions and an optional `defaults` dict.
+They return a `(instance, created: bool)` tuple.
+
+### `get_or_create`
+
+Find a record by the lookup fields. If it exists, return it unchanged. If not, create it.
+
+```python
+author, created = await Author.get_or_create(
+    email="alice@example.com",
+    defaults={"name": "Alice"},
+)
+# created=True  → new record inserted (email + name)
+# created=False → existing record returned (defaults ignored)
+```
+
+`defaults` is merged with the lookup kwargs only on creation:
+
+```python
+# Second call — record already exists, defaults are not applied
+author, created = await Author.get_or_create(
+    email="alice@example.com",
+    defaults={"name": "Should not change"},
+)
+assert created is False
+assert author.name == "Alice"  # original value preserved
+```
+
+### `update_or_create`
+
+Find a record by the lookup fields. If it exists, apply `defaults` and save. If not, create it.
+
+```python
+post, created = await Post.update_or_create(
+    slug="hello-world",
+    defaults={"title": "Hello World", "published": True},
+)
+# created=True  → new record (slug + defaults merged)
+# created=False → existing record updated with defaults, then saved
+```
+
+Idempotent upsert pattern — safe to call repeatedly:
+
+```python
+for item in incoming_feed:
+    await Article.update_or_create(
+        external_id=item["id"],
+        defaults={
+            "title":      item["title"],
+            "body":       item["body"],
+            "updated_at": datetime.utcnow(),
+        },
+    )
+```
+
+### Multiple lookup fields
+
+Pass multiple keyword arguments to match on more than one column (joined with AND):
+
+```python
+post, created = await Post.update_or_create(
+    title="Draft",
+    author_id=author.id,
+    defaults={"published": True},
+)
+```
+
+---
+
+## Bulk Operations
+
+Use bulk methods when inserting or updating many rows at once. Both methods reduce the number of round-trips to the database by batching statements.
+
+### `bulk_create` — batch INSERT
+
+```python
+# Build instances without saving
+posts = [Post(title=f"Post {i}", views=0) for i in range(1000)]
+
+# Insert all at once (default batch_size=500 → 2 INSERT statements)
+await Post.bulk_create(posts)
+
+# All instances have their id set after the call
+print(posts[0].id)  # e.g. 1
+```
+
+`batch_size` controls how many rows go into each `INSERT … VALUES (…), (…), …` statement.
+Tune it downward if you hit database parameter limits (SQLite caps at 999 bind variables).
+
+```python
+await Post.bulk_create(posts, batch_size=200)
+```
+
+Performance comparison vs. `create()` in a loop:
+
+| Method | 1 000 rows | SQL statements |
+|---|---|---|
+| `create()` in a loop | ~1 000 ms | 1 000 |
+| `bulk_create()` | ~5 ms | 2 |
+
+### `bulk_update` — batch UPDATE
+
+```python
+# Fetch records, modify in Python, then flush all at once
+posts = await Post.where(Post.published == False)
+for post in posts:
+    post.published = True
+    post.views = 0
+
+# Update only the changed fields (recommended)
+await Post.bulk_update(posts, fields=["published", "views"])
+```
+
+`fields` specifies which columns to include in the `SET` clause.
+Pass `fields=None` (the default) to update every non-PK column:
+
+```python
+await Post.bulk_update(posts)  # updates all columns
+```
+
+`batch_size` works the same way as in `bulk_create`:
+
+```python
+await Post.bulk_update(posts, fields=["score"], batch_size=200)
+```
+
+### Works inside transactions
+
+Both bulk methods respect the current transaction context:
+
+```python
+async with engine.transaction():
+    await Post.bulk_create(new_posts)
+    await Post.bulk_update(existing_posts, fields=["views"])
+    # Both are rolled back together on exception
 ```
 
 ---

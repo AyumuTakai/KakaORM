@@ -570,6 +570,7 @@ class Column(Generic[T]):
         unique: bool = False,
         index: bool = False,
         check: str | None = None,
+        validators: "list | None" = None,
     ) -> None:
         self.primary_key = primary_key
         self.nullable = nullable
@@ -577,6 +578,7 @@ class Column(Generic[T]):
         self.unique = unique
         self.index = index
         self.check = check
+        self.validators: list = validators or []
         self._name: str = ""
 
     # ── デスクリプタプロトコル ────────────────────────────────

@@ -28,6 +28,84 @@ DecimalColumn(max_digits=10, decimal_places=2)  # NUMERIC(10, 2)
 
 ---
 
+## バリデーション
+
+カラム定義にバリデータを付与します。`save()` は INSERT / UPDATE の前に自動的にバリデータを実行します。失敗した場合は `ValidationError` を送出し、DB には何も書き込まれません。
+
+```python
+from kakaorm import Model, StrColumn, IntColumn, ValidationError
+from kakaorm.validators import min_length, max_length, min_value, max_value, regex, one_of
+
+class User(Model):
+    name  = StrColumn(nullable=False, validators=[min_length(2), max_length(50)])
+    age   = IntColumn(nullable=True,  validators=[min_value(0), max_value(150)])
+    email = StrColumn(nullable=False, validators=[
+        regex(r"^[^@]+@[^@]+\.[^@]+$", message="有効なメールアドレスを入力してください。")
+    ])
+    role  = StrColumn(nullable=True,  validators=[one_of("admin", "user", "guest")])
+
+    class Meta:
+        table_name = "user"
+```
+
+### エラーの捕捉
+
+`ValidationError.errors` はフィールド名をキーにしたエラーメッセージリストの辞書です:
+
+```python
+user = User(name="A", age=-5, email="bad")
+try:
+    await user.save()
+except ValidationError as e:
+    print(e.errors)
+    # {
+    #   "name":  ["2 文字以上で入力してください。"],
+    #   "age":   ["0 以上の値を入力してください。"],
+    #   "email": ["有効なメールアドレスを入力してください。"],
+    # }
+```
+
+全フィールドのエラーを一度に収集するため、1 回の例外で全ての問題が分かります。
+
+### 手動バリデーション
+
+DB に触れずに `validate()` を直接呼び出すこともできます:
+
+```python
+user = User(name="Alice", age=30, email="alice@example.com")
+user.validate()  # 問題があれば即座に ValidationError を送出
+```
+
+### ビルトインバリデータ
+
+| バリデータ | チェック内容 |
+|---|---|
+| `min_length(n)` | `len(value) >= n` |
+| `max_length(n)` | `len(value) <= n` |
+| `min_value(n)` | `value >= n` |
+| `max_value(n)` | `value <= n` |
+| `regex(pattern, message=None)` | `re.search(pattern, value)` |
+| `one_of(*choices)` | `value in choices` |
+
+いずれも `None` 値はスキップします（存在チェックには `nullable=False` を使用してください）。
+
+### カスタムバリデータ
+
+`(value: Any) -> None` のシグネチャを持つ callable であればバリデータとして使えます。失敗時は `ValidationError` を送出してください:
+
+```python
+from kakaorm.validators import ValidationError
+
+def no_spaces(value):
+    if value and " " in value:
+        raise ValidationError("ユーザー名にスペースは使用できません。")
+
+class User(Model):
+    username = StrColumn(nullable=False, validators=[no_spaces])
+```
+
+---
+
 ## イベントフック
 
 `save()` / `delete()` の前後に任意の処理を差し込めます。Model を継承したクラスでメソッドをオーバーライドするだけです。
@@ -521,7 +599,62 @@ rows = await Post.all().select(
 
 > **注意** ウィンドウ関数は SQLite ではサポートされていません。PostgreSQL・MySQL 8.0+・MariaDB 10.2+ で使用してください。
 
+#### よく使うパターン
+
+**グループ内 Top-N** — 著者ごとに閲覧数上位 3 件を取得する:
+
+```python
+from kakaorm import RowNumber
+
+# 各投稿に著者内でのランクを付ける
+ranked = await Post.all().select(
+    Post.id,
+    Post.title,
+    Post.author_id,
+    Post.views,
+    RowNumber().over(
+        partition_by=[Post.author_id],
+        order_by=[Post.views.desc],   # 閲覧数が多い順 → rank 1
+    ).label("rn"),
+)
+
+# Python 側でフィルタ（または CTE と組み合わせる）
+top3 = [r for r in ranked if r["rn"] <= 3]
+```
+
+**移動平均** — 日別売上の 7 日間移動平均:
+
+```python
+from kakaorm import Avg
+
+rows = await Sale.all().select(
+    Sale.date,
+    Sale.amount,
+    Avg(Sale.amount).over(
+        order_by=[Sale.date],
+    ).label("moving_avg"),
+).order_by(Sale.date)
+```
+
+**前期比較** — 当月と前月の売上を並べて表示:
+
+```python
+from kakaorm import Lag
+
+rows = await MonthlyRevenue.all().select(
+    MonthlyRevenue.month,
+    MonthlyRevenue.revenue,
+    Lag(MonthlyRevenue.revenue, 1, 0).over(
+        order_by=[MonthlyRevenue.month],
+    ).label("prev_revenue"),
+).order_by(MonthlyRevenue.month)
+
+# revenue - prev_revenue が前月比増減
+```
+
 ### CTE（WITH 句）
+
+CTE はサブクエリに名前を付けてメインクエリから参照する機能です。複雑なクエリを段階的に組み立てるときに可読性が上がります。
 
 ```python
 # 高給社員がいる部署を CTE で定義して JOIN する
@@ -535,6 +668,73 @@ rows = await (
               .join(Employee, on=Employee.dept_id == Department.id)
               .select(Department.name, Employee.name)
               .where(Employee.salary >= 1000)
+)
+```
+
+#### よく使うパターン
+
+**CTE + ウィンドウ関数でグループ内 Top-N**:
+
+```python
+from kakaorm import RowNumber
+
+# CTE: 各投稿にランクを付ける
+ranked_posts = Post.all().select(
+    Post.id,
+    Post.title,
+    Post.author_id,
+    Post.views,
+    RowNumber().over(
+        partition_by=[Post.author_id],
+        order_by=[Post.views.desc],
+    ).label("rn"),
+)
+
+# メインクエリ: ランク 3 以内のみ取得
+top3 = await (
+    Post.all()
+        .with_cte("ranked", ranked_posts)
+        .join_raw("ranked", on="post.id = ranked.id")
+        .select(Post.title, Post.author_id, Post.views)
+        .where_raw("ranked.rn <= 3")
+)
+```
+
+**サブクエリの再利用** — 重いサブクエリを CTE にまとめて一度だけ計算させる:
+
+```python
+# アクティブユーザーの ID を CTE 化
+active_users = User.where(User.is_active == True).select(User.id)
+
+results = await (
+    Order.all()
+         .with_cte("actives", active_users)
+         .join_raw("actives", on="order.user_id = actives.id")
+         .select(Order.id, Order.total)
+         .order_by(Order.total.desc)
+         .limit(100)
+)
+```
+
+**集計してからフィルタ** — ユーザーごとの合計購入額が高い顧客を取得:
+
+```python
+from kakaorm import Sum
+
+# CTE: ユーザーごとの合計購入額
+user_totals = (
+    Order.all()
+         .select(Order.user_id, Sum(Order.total).label("total_spend"))
+         .group_by(Order.user_id)
+)
+
+# 合計 10,000 以上のユーザーを取得
+vip_customers = await (
+    User.all()
+        .with_cte("totals", user_totals)
+        .join_raw("totals", on="user.id = totals.user_id")
+        .select(User.name, User.email)
+        .where_raw("totals.total_spend >= 10000")
 )
 ```
 
@@ -586,6 +786,147 @@ await (
     Employee.where(Employee.hire_year <= 1993)
         .insert_into(Archive, emp_id=Employee.id, year=Employee.hire_year)
 )
+```
+
+---
+
+## Upsert — `get_or_create` / `update_or_create`
+
+どちらのメソッドも lookup 条件をキーワード引数で受け取り、オプションで `defaults` 辞書を受け取ります。
+戻り値は `(instance, created: bool)` のタプルです。
+
+### `get_or_create`
+
+lookup フィールドでレコードを検索し、存在すれば返し、なければ作成します。
+
+```python
+author, created = await Author.get_or_create(
+    email="alice@example.com",
+    defaults={"name": "Alice"},
+)
+# created=True  → 新規作成（email + name で INSERT）
+# created=False → 既存レコードを返す（defaults は無視）
+```
+
+`defaults` は新規作成時のみ lookup kwargs とマージされます:
+
+```python
+# 2 回目の呼び出し — レコードが既にある場合 defaults は適用されない
+author, created = await Author.get_or_create(
+    email="alice@example.com",
+    defaults={"name": "変わらない"},
+)
+assert created is False
+assert author.name == "Alice"  # 元の値が維持される
+```
+
+### `update_or_create`
+
+lookup フィールドでレコードを検索し、存在すれば `defaults` で更新して保存、なければ作成します。
+
+```python
+post, created = await Post.update_or_create(
+    slug="hello-world",
+    defaults={"title": "Hello World", "published": True},
+)
+# created=True  → 新規作成（slug + defaults をマージ）
+# created=False → 既存レコードを defaults で更新して保存
+```
+
+冪等な upsert パターン — 繰り返し呼び出しても安全です:
+
+```python
+for item in incoming_feed:
+    await Article.update_or_create(
+        external_id=item["id"],
+        defaults={
+            "title":      item["title"],
+            "body":       item["body"],
+            "updated_at": datetime.utcnow(),
+        },
+    )
+```
+
+### 複数の lookup フィールド
+
+複数のキーワード引数を渡すと AND で検索します:
+
+```python
+post, created = await Post.update_or_create(
+    title="Draft",
+    author_id=author.id,
+    defaults={"published": True},
+)
+```
+
+---
+
+## 一括操作（Bulk Operations）
+
+多数のレコードを一度に挿入・更新する場合は bulk メソッドを使用してください。DB へのラウンドトリップ回数を減らしてパフォーマンスを大幅に改善できます。
+
+### `bulk_create` — 一括 INSERT
+
+```python
+# インスタンスを作成（まだ保存しない）
+posts = [Post(title=f"投稿 {i}", views=0) for i in range(1000)]
+
+# 一括 INSERT（デフォルト batch_size=500 → 2 回の INSERT 文）
+await Post.bulk_create(posts)
+
+# 呼び出し後、各インスタンスに id が設定される
+print(posts[0].id)  # e.g. 1
+```
+
+`batch_size` で 1 つの `INSERT … VALUES (…), (…), …` に含める行数を制御できます。
+SQLite はバインド変数が 999 個までに制限されているため、カラム数が多い場合は小さくしてください。
+
+```python
+await Post.bulk_create(posts, batch_size=200)
+```
+
+`create()` ループとのパフォーマンス比較:
+
+| 方法 | 1,000 件 | SQL 発行回数 |
+|---|---|---|
+| `create()` ループ | ~1,000 ms | 1,000 回 |
+| `bulk_create()` | ~5 ms | 2 回 |
+
+### `bulk_update` — 一括 UPDATE
+
+```python
+# レコードを取得して Python 側で変更し、一括で DB に書き戻す
+posts = await Post.where(Post.published == False)
+for post in posts:
+    post.published = True
+    post.views = 0
+
+# 更新するフィールドのみ指定（推奨）
+await Post.bulk_update(posts, fields=["published", "views"])
+```
+
+`fields` に更新対象のカラム名を渡します。
+`fields=None`（デフォルト）にすると全非 PK カラムを更新します:
+
+```python
+await Post.bulk_update(posts)  # 全カラムを更新
+```
+
+`batch_size` の動作は `bulk_create` と同様です:
+
+```python
+await Post.bulk_update(posts, fields=["score"], batch_size=200)
+```
+
+### トランザクションとの組み合わせ
+
+両メソッドともトランザクションコンテキストを尊重します:
+
+```python
+async with engine.transaction():
+    await Post.bulk_create(new_posts)
+    await Post.bulk_update(existing_posts, fields=["views"])
+    # 例外が発生すると両方ともロールバックされる
 ```
 
 ---

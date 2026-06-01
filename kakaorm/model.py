@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 from kakaorm.columns.base import Column, ColumnMeta, WhereClause
 from kakaorm.columns.types import IntColumn
+from kakaorm.validators import ValidationError
 
 T = TypeVar("T", bound="Model")
 
@@ -270,6 +271,72 @@ class Model(metaclass=AsyncORMMeta):
         return instance
 
     @classmethod
+    async def get_or_create(
+        cls: Type[T],
+        defaults: "dict[str, Any] | None" = None,
+        **lookup: Any,
+    ) -> "tuple[T, bool]":
+        """
+        lookup フィールドで検索し、存在すれば返し、なければ作成する。
+
+        :param defaults: 新規作成時のみ適用する追加フィールド。
+        :param lookup: 検索条件（フィールド名 = 値）。
+        :returns: ``(instance, created)`` のタプル。
+                  ``created`` が ``True`` なら新規作成、``False`` なら既存を返した。
+
+        例::
+
+            author, created = await Author.get_or_create(
+                email="alice@example.com",
+                defaults={"name": "Alice"},
+            )
+        """
+        from functools import reduce
+        import operator
+
+        clauses = [getattr(cls, k) == v for k, v in lookup.items()]
+        clause = reduce(operator.and_, clauses) if len(clauses) > 1 else clauses[0]
+        instance = await cls.get_or_none(clause)
+        if instance is not None:
+            return instance, False
+        create_kwargs = {**lookup, **(defaults or {})}
+        return await cls.create(**create_kwargs), True
+
+    @classmethod
+    async def update_or_create(
+        cls: Type[T],
+        defaults: "dict[str, Any] | None" = None,
+        **lookup: Any,
+    ) -> "tuple[T, bool]":
+        """
+        lookup フィールドで検索し、存在すれば ``defaults`` で更新し、なければ作成する。
+
+        :param defaults: 更新 / 作成時に適用するフィールド。
+        :param lookup: 検索条件（フィールド名 = 値）。
+        :returns: ``(instance, created)`` のタプル。
+
+        例::
+
+            post, created = await Post.update_or_create(
+                slug="hello-world",
+                defaults={"title": "Hello World", "published": True},
+            )
+        """
+        from functools import reduce
+        import operator
+
+        clauses = [getattr(cls, k) == v for k, v in lookup.items()]
+        clause = reduce(operator.and_, clauses) if len(clauses) > 1 else clauses[0]
+        instance = await cls.get_or_none(clause)
+        if instance is None:
+            create_kwargs = {**lookup, **(defaults or {})}
+            return await cls.create(**create_kwargs), True
+        for key, value in (defaults or {}).items():
+            setattr(instance, key, value)
+        await instance.save()
+        return instance, False
+
+    @classmethod
     async def truncate(cls, *, restart_identity: bool = True) -> None:
         """
         テーブルの全行を削除し、オートインクリメントシーケンスをリセットする。
@@ -316,12 +383,80 @@ class Model(metaclass=AsyncORMMeta):
             await cls._engine._bulk_insert(cls, instances[i : i + batch_size])
         return instances
 
+    @classmethod
+    async def bulk_update(
+        cls: "Type[T]",
+        instances: "list[T]",
+        fields: "list[str] | None" = None,
+        *,
+        batch_size: int = 500,
+    ) -> "list[T]":
+        """
+        複数インスタンスを最小限の SQL で一括 UPDATE する。
+
+        通常の ``save()`` が N 件で N 回の UPDATE を発行するのに対し、
+        ``bulk_update()`` は ``batch_size`` 件ごとにまとめて処理する。
+
+        例::
+
+            posts = await Post.where(Post.published == False)
+            for post in posts:
+                post.views = 0
+            await Post.bulk_update(posts, fields=["views"])
+            # → 1 回の executemany で全件更新
+
+        :param instances: 更新済みの Model インスタンスのリスト。
+        :param fields: 更新するフィールド名のリスト。None の場合は全非 PK フィールドを更新。
+        :param batch_size: 1 バッチに含める最大件数。
+        :returns: 同じインスタンスのリスト（in-place 更新）。
+        """
+        if not instances:
+            return []
+        if cls._engine is None:
+            raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
+        for i in range(0, len(instances), batch_size):
+            await cls._engine._bulk_update(instances[i : i + batch_size], fields)
+        return instances
+
     # ── インスタンスメソッド ──────────────────────────────────
+
+    def validate(self) -> None:
+        """
+        カラム定義の ``validators`` を実行し、失敗があれば ``ValidationError`` を送出する。
+
+        ``save()`` から自動的に呼ばれるが、保存前に手動で呼び出すこともできる。
+
+        例::
+
+            user = User(name="", age=-1)
+            try:
+                user.validate()
+            except ValidationError as e:
+                print(e.errors)
+                # {"name": ["2 文字以上で入力してください。"], "age": ["0 以上の値を入力してください。"]}
+        """
+        errors: dict[str, list[str]] = {}
+        for name, col in self._meta.columns.items():
+            if not col.validators:
+                continue
+            value = self._data.get(name)
+            for validator in col.validators:
+                try:
+                    validator(value)
+                except ValidationError as e:
+                    errors.setdefault(name, []).extend(
+                        msg
+                        for msgs in e.errors.values()
+                        for msg in msgs
+                    )
+        if errors:
+            raise ValidationError(errors)
 
     async def save(self) -> None:
         """INSERT または UPDATE を実行する。_is_new が True なら INSERT。"""
         if self._engine is None:
             raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
+        self.validate()
         if self._is_new:
             await self.before_insert()
             await self._engine._insert(self)

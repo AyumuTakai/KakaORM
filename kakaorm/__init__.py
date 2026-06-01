@@ -1,4 +1,4 @@
-__version__ = "0.3.4"
+__version__ = "0.4.0"
 
 from kakaorm.engine import (
     Engine,
@@ -42,6 +42,15 @@ from kakaorm.columns.base import (
 from kakaorm.relationship import has_many, has_one, belongs_to
 from kakaorm.query import Subquery
 from kakaorm.migration import Migrator, VersionedMigrator
+from kakaorm.validators import (
+    ValidationError,
+    min_length,
+    max_length,
+    min_value,
+    max_value,
+    regex,
+    one_of,
+)
 
 # CLI（オプション依存なので try/except）
 try:
@@ -98,6 +107,14 @@ __all__ = [
     # Migration
     "Migrator",
     "VersionedMigrator",
+    # Validation
+    "ValidationError",
+    "min_length",
+    "max_length",
+    "min_value",
+    "max_value",
+    "regex",
+    "one_of",
     # CLI (optional)
     "cli_main",
 ]

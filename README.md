@@ -23,6 +23,9 @@ An async-native ORM for Python. Supports PostgreSQL (`asyncpg` / `psycopg3`), SQ
 - **Migration autogenerate** — Auto-generate diff files with `autogenerate()`; manage with `run_files()` + `downgrade()`
 - **CTE (WITH clause)** — Structure complex queries with `with_cte(name, queryset)`
 - **Deletion strategies** — `SoftDeleteModel` (logical deletion) and `ArchiveModel` (archive deletion) base classes; switch `delete()` behavior simply by changing inheritance
+- **Validation** — Attach validators to columns (`min_length`, `max_length`, `min_value`, `max_value`, `regex`, `one_of`); `save()` auto-validates and raises `ValidationError` before any DB write
+- **Upsert** — `get_or_create()` and `update_or_create()` return `(instance, created: bool)`
+- **Bulk update** — `bulk_update(instances, fields=[...])` flushes many instances in a single `executemany` call
 
 ## Installation
 
@@ -198,6 +201,44 @@ await author.save()
 await author.delete()
 ```
 
+### Validation
+
+```python
+from kakaorm.validators import min_length, max_length, min_value, regex
+
+class User(Model):
+    name  = StrColumn(nullable=False, validators=[min_length(2), max_length(50)])
+    age   = IntColumn(nullable=True,  validators=[min_value(0)])
+    email = StrColumn(nullable=False, validators=[
+        regex(r"^[^@]+@[^@]+\.[^@]+$", message="Enter a valid email address.")
+    ])
+
+    class Meta:
+        table_name = "user"
+
+try:
+    await User.create(name="A", age=-1, email="bad")
+except ValidationError as e:
+    print(e.errors)
+    # {"name": ["..."], "age": ["..."], "email": ["..."]}
+```
+
+### Upsert
+
+```python
+# get_or_create — find or create; returns (instance, created: bool)
+author, created = await Author.get_or_create(
+    email="alice@example.com",
+    defaults={"name": "Alice"},
+)
+
+# update_or_create — find and update, or create
+post, created = await Post.update_or_create(
+    slug="hello-world",
+    defaults={"title": "Hello World", "published": True},
+)
+```
+
 ### Bulk Operations
 
 ```python
@@ -205,10 +246,13 @@ await author.delete()
 posts = [Post(title=f"Post {i}", views=0) for i in range(1000)]
 await Post.bulk_create(posts)
 
-# Bulk UPDATE
-await Post.where(Post.published == False).update(published=True)
+# Bulk UPDATE — flush many instances at once (uses executemany)
+for post in posts:
+    post.views = 0
+await Post.bulk_update(posts, fields=["views"])
 
-# Bulk DELETE
+# QuerySet-level bulk UPDATE / DELETE
+await Post.where(Post.published == False).update(published=True)
 await Post.where(Post.views == 0).delete()
 
 # TRUNCATE (also resets sequences)
@@ -283,6 +327,7 @@ kakaorm/
 │   ├── engine.py            # Engine base class + AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine, connect()
 │   ├── model.py             # Model base class, AsyncORMMeta metaclass
 │   ├── query.py             # QuerySet (lazy query builder)
+│   ├── validators.py        # ValidationError + built-in validators (min_length, max_length, …)
 │   ├── soft_delete.py       # SoftDeleteModel / SoftDeleteQuerySet (logical deletion)
 │   ├── archive.py           # ArchiveModel / ArchiveQuerySet (archive deletion)
 │   ├── relationship.py      # has_many / has_one / belongs_to descriptors
@@ -303,6 +348,9 @@ kakaorm/
 │   ├── test_aggregates.py
 │   ├── test_transaction.py
 │   ├── test_bulk_create.py
+│   ├── test_bulk_update.py  # bulk_update()
+│   ├── test_validation.py   # Column validators + ValidationError
+│   ├── test_upsert.py       # get_or_create / update_or_create
 │   ├── test_raw_sql.py
 │   ├── test_migration.py
 │   ├── test_indexes.py      # Composite indexes

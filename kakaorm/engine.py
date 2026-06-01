@@ -238,6 +238,39 @@ class Engine(ABC):
         for instance in instances:
             await self._insert(instance)
 
+    async def _update_fields(self, instance: Any, fields: list[str] | None) -> None:
+        """指定フィールドのみ UPDATE する。fields が None なら全非 PK フィールドを更新。"""
+        meta = instance._meta
+        pk_name = meta.pk_name
+        col_names = [
+            name for name, col in meta.columns.items()
+            if not col.primary_key and (fields is None or name in fields)
+        ]
+        if not col_names:
+            return
+        values = [meta.columns[c].to_db(instance._data.get(c)) for c in col_names]
+        set_clause = ", ".join(
+            f"{self.quote_identifier(name)} = {self._param(i + 1)}"
+            for i, name in enumerate(col_names)
+        )
+        pk_placeholder = self._param(len(col_names) + 1)
+        table = self.quote_identifier(meta.table_name)
+        sql = (
+            f"UPDATE {table} "
+            f"SET {set_clause} "
+            f"WHERE {self.quote_identifier(pk_name)} = {pk_placeholder}"
+        )
+        await self._execute(sql, values + [instance._data[pk_name]])
+
+    async def _bulk_update(self, instances: list, fields: list[str] | None = None) -> None:
+        """
+        複数インスタンスを一括 UPDATE する。
+        デフォルト実装は1件ずつ UPDATE するループ。
+        各サブクラスでオーバーライドして効率化する。
+        """
+        for instance in instances:
+            await self._update_fields(instance, fields)
+
     async def create_table(self, model_cls: Any, *, if_not_exists: bool = True) -> None:
         """モデルクラスから CREATE TABLE 文を生成して実行する。"""
         meta = model_cls._meta
@@ -598,6 +631,32 @@ class AioSQLiteEngine(Engine):
                 first_id = last_id - len(batch) + 1
                 for j, inst in enumerate(batch):
                     inst._data[pk_name] = first_id + j
+
+    async def _bulk_update(self, instances: list, fields: list[str] | None = None) -> None:
+        """SQLite 最適化: executemany で一括 UPDATE する。"""
+        if not instances:
+            return
+        meta = instances[0]._meta
+        pk_name = meta.pk_name
+        col_names = [
+            name for name, col in meta.columns.items()
+            if not col.primary_key and (fields is None or name in fields)
+        ]
+        if not col_names:
+            return
+        set_clause = ", ".join(f"{self.quote_identifier(name)} = ?" for name in col_names)
+        sql = (
+            f"UPDATE {self.quote_identifier(meta.table_name)} "
+            f"SET {set_clause} "
+            f"WHERE {self.quote_identifier(pk_name)} = ?"
+        )
+        params_list = [
+            [meta.columns[c].to_db(inst._data.get(c)) for c in col_names] + [inst._data[pk_name]]
+            for inst in instances
+        ]
+        await self._conn.executemany(sql, params_list)
+        if not _in_tx.get():
+            await self._conn.commit()
 
     @asynccontextmanager
     async def transaction(self):
