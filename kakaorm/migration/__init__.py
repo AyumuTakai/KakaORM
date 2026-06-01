@@ -108,10 +108,20 @@ class Migrator:
 
         削除されたカラムは安全のため WARNING コメントとして出力する。
         DROP も含める場合は :meth:`plan_with_drop` を使用する。
+
+        ArchiveModel サブクラス（``_archive_table_name`` 属性を持つモデル）は
+        アーカイブテーブルも自動的に差分計算の対象に含める。
         """
         plan = MigrationPlan(engine=self.engine)
 
+        # ArchiveModel のアーカイブテーブルを expanded_models に追加
+        expanded_models: list[Type[Any]] = []
         for model_cls in models:
+            expanded_models.append(model_cls)
+            if hasattr(model_cls, "_archive_table_name"):
+                expanded_models.append(self._make_archive_proxy(model_cls))
+
+        for model_cls in expanded_models:
             meta = model_cls._meta
             table = meta.table_name
 
@@ -303,6 +313,51 @@ class Migrator:
             + ",\n".join(col_defs)
             + f"\n){self.engine._table_suffix}"
         )
+
+    def _make_archive_proxy(self, model_cls: Any) -> Any:
+        """
+        ArchiveModel のアーカイブテーブルをあたかも通常モデルのように扱う
+        プロキシオブジェクトを返す。
+
+        アーカイブテーブルは:
+          - メインテーブルと同じカラム構成（id は auto_increment なし）
+          - archived_at TEXT カラムが追加される
+        """
+        from kakaorm.columns.base import Column
+        from kakaorm.columns.types import DateTimeColumn
+        from kakaorm.model import ModelMeta
+
+        main_meta  = model_cls._meta
+        archive_table = model_cls._archive_table_name()
+
+        # id カラムの auto_increment を無効にしたコピーを作る
+        archive_columns: dict[str, Column] = {}
+        for col_name, col in main_meta.columns.items():
+            if getattr(col, "auto_increment", False):
+                from kakaorm.columns.types import IntColumn
+                new_col = IntColumn(primary_key=col.primary_key, nullable=col.nullable)
+                new_col._name = col_name
+                archive_columns[col_name] = new_col
+            else:
+                archive_columns[col_name] = col
+
+        # archived_at カラムを追加
+        archived_at_col = DateTimeColumn(nullable=False)
+        archived_at_col._name = "archived_at"
+        archive_columns["archived_at"] = archived_at_col
+
+        archive_meta = ModelMeta(
+            table_name=archive_table,
+            columns=archive_columns,
+            pk_name=main_meta.pk_name,
+        )
+        archive_meta._engine = getattr(model_cls, "_engine", None)
+
+        class _ArchiveProxy:
+            _meta = archive_meta
+            _engine = getattr(model_cls, "_engine", None)
+
+        return _ArchiveProxy
 
     def _warning_to_drop(self, warning_comment: str) -> str:
         import re

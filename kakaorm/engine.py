@@ -267,6 +267,52 @@ class Engine(ABC):
             sql = f"CREATE INDEX {exists}{idx_name} ON {quoted_table} ({quoted_cols})"
             await self._execute(sql, [])
 
+    async def create_archive_table(self, model_cls: Any, *, if_not_exists: bool = True) -> None:
+        """
+        ArchiveModel のアーカイブテーブルを作成する。
+
+        メインテーブルと同じカラム構成に archived_at カラムを追加する。
+        id カラムの AUTO_INCREMENT は無効化する（元の値を保持するため）。
+
+        例::
+
+            class Log(ArchiveModel):
+                body = StrColumn()
+
+            await engine.create_table(Log)
+            await engine.create_archive_table(Log)
+            # → archive_log テーブルが作成される
+        """
+        from kakaorm.columns.types import DateTimeColumn, IntColumn
+
+        meta = model_cls._meta
+        archive_table = model_cls._archive_table_name()
+        exists = "IF NOT EXISTS " if if_not_exists else ""
+
+        col_defs: list[str] = []
+        for col_name, col in meta.columns.items():
+            if getattr(col, "auto_increment", False):
+                archive_col = IntColumn(primary_key=col.primary_key, nullable=col.nullable)
+                archive_col._name = col_name
+                ddl = self._adapt_ddl(archive_col.ddl_fragment())
+            else:
+                ddl = self._adapt_ddl(col.ddl_fragment())
+            col_defs.append(f"  {self.quote_identifier(col_name)} {ddl}")
+
+        archived_at_col = DateTimeColumn(nullable=False)
+        archived_at_col._name = "archived_at"
+        archived_at_ddl = self._adapt_ddl(archived_at_col.ddl_fragment())
+        col_defs.append(f"  {self.quote_identifier('archived_at')} {archived_at_ddl} NOT NULL")
+
+        col_defs = self._post_process_col_defs(col_defs)
+        quoted_table = self.quote_identifier(archive_table)
+        sql = (
+            f"CREATE TABLE {exists}{quoted_table} (\n"
+            + ",\n".join(col_defs)
+            + f"\n){self._table_suffix}"
+        )
+        await self._execute(sql, [])
+
     async def drop_table(
         self,
         model_cls: Any,
