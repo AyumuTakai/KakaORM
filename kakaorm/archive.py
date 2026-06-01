@@ -109,24 +109,49 @@ class ArchiveQuerySet(QuerySet[T]):
         return [(f"{table}.{c}", []) for c in self._col_names()]
 
     def _translate_where_for_archive(self) -> list[WhereClause]:
-        """WHERE 句内のメインテーブル参照をアーカイブテーブルに置換する。"""
+        """WHERE 句内のメインテーブル参照をアーカイブテーブルに置換する。
+
+        WhereClause は生成時点では非クォート（例: event.id）のため、
+        非クォート・クォート両方を置換する。
+        """
         main = self._main_table()
         archive = self._archive_table()
         engine = self._model._engine
         result = []
         for clause in self._where:
             sql = clause.sql
+            # 非クォート参照を置換（WhereClause の元の SQL）
+            sql = sql.replace(main + ".", archive + ".")
+            # クォート参照を置換（_quote_identifiers_in_where で変換済みの場合）
             if engine:
                 q_main    = engine.quote_identifier(main)
                 q_archive = engine.quote_identifier(archive)
                 sql = sql.replace(q_main + ".", q_archive + ".")
-            else:
-                sql = sql.replace(main + ".", archive + ".")
             result.append(WhereClause(sql, list(clause.params)))
         return result
 
-    def _build_archive_sql(self) -> tuple[str, list[Any]]:
-        """アーカイブテーブル用の SELECT SQL を構築する。"""
+    def _quote_archive_where(self, sql: str) -> str:
+        """アーカイブ WHERE 句内の非クォート参照をクォートする。"""
+        engine = self._model._engine
+        if not engine:
+            return sql
+        archive = self._archive_table()
+        q_archive = engine.quote_identifier(archive)
+        for col_name in self._col_names():
+            unquoted = f"{archive}.{col_name}"
+            quoted   = f"{q_archive}.{engine.quote_identifier(col_name)}"
+            sql = sql.replace(unquoted, quoted)
+        return sql
+
+    def _build_archive_sql(
+        self,
+        *,
+        with_pagination: bool = True,
+    ) -> tuple[str, list[Any]]:
+        """アーカイブテーブル用の SELECT SQL を構築する。
+
+        with_pagination=False のとき LIMIT/OFFSET/ORDER BY を付与しない（UNION 用）。
+        """
         archive = self._archive_table()
         engine  = self._model._engine
         q_archive = engine.quote_identifier(archive) if engine else archive
@@ -137,24 +162,25 @@ class ArchiveQuerySet(QuerySet[T]):
         sql = f"SELECT {col_sql} FROM {q_archive}"
         params: list[Any] = []
 
-        # WHERE（メインテーブル参照をアーカイブに置換）
+        # WHERE（メインテーブル参照をアーカイブに置換してクォート）
         archive_where = self._translate_where_for_archive()
         if archive_where:
             merged = archive_where[0]
             for c in archive_where[1:]:
                 merged = merged & c
-            sql += f" WHERE {merged.sql}"
+            where_sql = self._quote_archive_where(merged.sql)
+            sql += f" WHERE {where_sql}"
             params.extend(merged.params)
 
-        if self._order_by:
-            sql += " ORDER BY " + ", ".join(self._order_by)
-
-        if self._limit_val is not None:
-            sql += f" LIMIT {self._limit_val}"
-        elif self._offset_val is not None:
-            sql += " LIMIT -1"
-        if self._offset_val is not None:
-            sql += f" OFFSET {self._offset_val}"
+        if with_pagination:
+            if self._order_by:
+                sql += " ORDER BY " + ", ".join(self._order_by)
+            if self._limit_val is not None:
+                sql += f" LIMIT {self._limit_val}"
+            elif self._offset_val is not None:
+                sql += " LIMIT -1"
+            if self._offset_val is not None:
+                sql += f" OFFSET {self._offset_val}"
 
         return sql, params
 
@@ -189,9 +215,32 @@ class ArchiveQuerySet(QuerySet[T]):
             return [self._hydrate_safe(row) for row in rows]
 
         # _INCLUDE: UNION ALL
-        main_sql,    main_params    = self._build_main_explicit_sql()
-        archive_sql, archive_params = self._build_archive_sql()
-        union_sql    = f"{main_sql} UNION ALL {archive_sql}"
+        # LIMIT/ORDER BY は UNION ALL の後に付ける必要があるため、
+        # 各サブクエリからは除いて最終 SQL に追加する。
+        saved_limit  = self._limit_val
+        saved_offset = self._offset_val
+        saved_order  = self._order_by
+        self._limit_val  = None
+        self._offset_val = None
+        self._order_by   = []
+        try:
+            main_sql,    main_params    = self._build_main_explicit_sql()
+            archive_sql, archive_params = self._build_archive_sql(with_pagination=False)
+        finally:
+            self._limit_val  = saved_limit
+            self._offset_val = saved_offset
+            self._order_by   = saved_order
+
+        union_sql = f"{main_sql} UNION ALL {archive_sql}"
+        if saved_order:
+            union_sql += " ORDER BY " + ", ".join(saved_order)
+        if saved_limit is not None:
+            union_sql += f" LIMIT {saved_limit}"
+        elif saved_offset is not None:
+            union_sql += " LIMIT -1"
+        if saved_offset is not None:
+            union_sql += f" OFFSET {saved_offset}"
+
         union_params = main_params + archive_params
         rows = await self._engine._fetch(union_sql, union_params)
         return [self._hydrate_safe(row) for row in rows]
