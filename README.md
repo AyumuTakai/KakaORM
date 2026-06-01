@@ -479,6 +479,187 @@ rows = await (
 )
 ```
 
+### 集計関数
+
+#### クイック集計メソッド
+
+`QuerySet` には単一集計を返すショートカットメソッドが用意されています。
+
+```python
+# 件数
+n = await Post.all().count()                            # COUNT(*)
+n = await Post.where(Post.published == True).count()    # WHERE 付き
+
+# 合計・平均・最大・最小
+total = await Post.all().sum(Post.views)
+avg   = await Post.all().avg(Post.score)
+hi    = await Post.all().max(Post.views)
+lo    = await Post.all().min(Post.score)
+
+# 存在確認
+has_draft = await Post.where(Post.published == False).exists()  # bool
+```
+
+#### aggregate() — 複数集計の一括実行
+
+1 回の SQL で複数の集計値を同時に取得します。
+
+```python
+from kakaorm import Sum, Avg, Max, Min, Count
+
+stats = await Post.all().aggregate(
+    total_views = Sum(Post.views),
+    avg_score   = Avg(Post.score),
+    max_views   = Max(Post.views),
+    post_count  = Count(Post.id),
+)
+# {
+#   "total_views": 12500,
+#   "avg_score": 3.8,
+#   "max_views": 2000,
+#   "post_count": 42
+# }
+
+# WHERE フィルタとの組み合わせ
+stats = await Post.where(Post.published == True).aggregate(
+    published_views = Sum(Post.views),
+    published_count = Count(Post.id),
+)
+```
+
+#### SELECT での集計式
+
+`select()` に集計クラスを渡すと、任意のカラムと集計値を混在させた行を取得できます。`.label()` で結果のキー名を指定します。
+
+| クラス | SQL 関数 | 引数 |
+|--------|----------|------|
+| `Count(col)` | `COUNT(col)` | カラム省略で `COUNT(*)` |
+| `Sum(col)` | `SUM(col)` | カラム必須 |
+| `Avg(col)` | `AVG(col)` | カラム必須 |
+| `Max(col)` | `MAX(col)` | カラム必須 |
+| `Min(col)` | `MIN(col)` | カラム必須 |
+
+```python
+from kakaorm import Count, Sum, Avg
+
+rows = await (
+    Post.all()
+        .select(
+            Post.author_id,
+            Count(Post.id).label("post_count"),
+            Sum(Post.views).label("total_views"),
+            Avg(Post.score).label("avg_score"),
+        )
+        .group_by(Post.author_id)
+)
+# [
+#   {"author_id": 1, "post_count": 3, "total_views": 3600, "avg_score": 4.0},
+#   {"author_id": 2, "post_count": 1, "total_views":  100, "avg_score": 3.5},
+# ]
+```
+
+#### GROUP BY / HAVING
+
+`.group_by()` でグループ化し、`.having()` で集計後の絞り込みを行います。  
+`having()` には集計クラスの比較演算子（`==`, `!=`, `>`, `>=`, `<`, `<=`）が使えます。
+
+```python
+from kakaorm import Count, Sum
+
+# 投稿が 2 件以上ある著者を取得
+rows = await (
+    Post.all()
+        .select(Post.author_id, Count(Post.id).label("cnt"))
+        .group_by(Post.author_id)
+        .having(Count(Post.id) >= 2)
+)
+
+# 合計ビュー数 1000 以上かつ投稿が 3 件以上の著者
+rows = await (
+    Post.all()
+        .select(Post.author_id, Sum(Post.views).label("views"))
+        .group_by(Post.author_id)
+        .having(Sum(Post.views) >= 1000)
+        .having(Count(Post.id) >= 3)     # .having() を重ねると AND で結合
+)
+
+# 集計結果でソート
+rows = await (
+    Post.all()
+        .select(Post.author_id, Count(Post.id).label("cnt"))
+        .group_by(Post.author_id)
+        .order_by(Count(Post.id).desc)
+)
+```
+
+#### ウィンドウ関数
+
+`OVER (PARTITION BY ... ORDER BY ...)` 句を生成するクラスが用意されています。  
+ウィンドウ関数は `SELECT` 句にのみ使用できます（`WHERE` / `HAVING` 不可）。
+
+```python
+from kakaorm import RowNumber, Rank, DenseRank, Lag, Lead, Sum, Avg
+
+# 著者ごとの投稿順位
+rows = await Post.all().select(
+    Post.title,
+    Post.author_id,
+    Post.views,
+    RowNumber().over(
+        partition_by=[Post.author_id],
+        order_by=[Post.views],          # 昇順
+    ).label("row_num"),
+)
+
+# 全体ランキング（同率あり）
+rows = await Post.all().select(
+    Post.title,
+    Post.views,
+    Rank().over(order_by=[Post.views]).label("rank"),
+    DenseRank().over(order_by=[Post.views]).label("dense_rank"),
+)
+
+# 1 つ前の行の views を取得（LAG）
+rows = await Post.all().select(
+    Post.title,
+    Post.views,
+    Lag(Post.views, 1, 0).over(order_by=[Post.views]).label("prev_views"),
+)
+
+# 1 つ後の行の views を取得（LEAD）
+rows = await Post.all().select(
+    Post.title,
+    Post.views,
+    Lead(Post.views, 1, 0).over(order_by=[Post.views]).label("next_views"),
+)
+
+# 累積合計（SUM OVER）
+rows = await Post.all().select(
+    Post.title,
+    Post.views,
+    Sum(Post.views).over(
+        partition_by=[Post.author_id],
+        order_by=[Post.views],
+    ).label("cumulative_views"),
+)
+```
+
+利用可能なウィンドウ関数クラス：
+
+| クラス | SQL | 説明 |
+|--------|-----|------|
+| `RowNumber()` | `ROW_NUMBER()` | 連続した一意の行番号 |
+| `Rank()` | `RANK()` | 同率同順位・次は飛ばす |
+| `DenseRank()` | `DENSE_RANK()` | 同率同順位・次は飛ばさない |
+| `Lag(col, n, default)` | `LAG(col, n, default)` | n 行前の値 |
+| `Lead(col, n, default)` | `LEAD(col, n, default)` | n 行後の値 |
+| `Sum(col).over(...)` | `SUM(col) OVER (...)` | 累積合計 |
+| `Avg(col).over(...)` | `AVG(col) OVER (...)` | 移動平均 |
+| `Max(col).over(...)` | `MAX(col) OVER (...)` | ウィンドウ最大値 |
+| `Min(col).over(...)` | `MIN(col) OVER (...)` | ウィンドウ最小値 |
+
+> **注意** ウィンドウ関数は SQLite ではサポートされていません。PostgreSQL・MySQL 8.0+・MariaDB 10.2+ で使用してください。
+
 ### CTE（WITH 句）
 
 ```python
