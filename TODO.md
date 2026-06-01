@@ -9,9 +9,9 @@
 - [x] サブクエリ (WHERE col IN/NOT IN (SELECT ...) 対応)
 - [x] CASE WHEN 式 (SELECT 列・UPDATE SET 句での条件分岐)
 - [x] CTE (WITH 句) (`QuerySet.with_cte(name, queryset)`)
+- [x] ウィンドウ関数 (`RowNumber` / `Rank` / `DenseRank` / `Lag` / `Lead` / `Sum().over()` 等)
 - [ ] SQL 文字列関数 (REPLACE / CONCAT / SUBSTR 等)
-- [ ] ウィンドウ関数
-- [ ] UNION / INTERSECT
+- [ ] UNION / INTERSECT (汎用 QuerySet API)
 
 ## モデル・スキーマ
 
@@ -26,6 +26,9 @@
 
 - [x] リレーション定義 (`relationship()` 前向きFK・逆参照)
 - [x] Eager ローディング (`prefetch()` — has_many / has_one / belongs_to を一括取得、N+1 解消)
+- [x] 論理削除 (`SoftDeleteModel` — `deleted_at` による削除、`include_deleted()` / `only_deleted()` / `restore()` / `purge()`)
+- [x] アーカイブ削除 (`ArchiveModel` — `archive_{table}` への移動、`include_deleted()` UNION ALL / `restore()` / `purge()`)
+- [x] 削除戦略の `autogenerate()` 連携 — `ArchiveModel` のアーカイブテーブルを自動的に差分計算の対象に含める
 - [ ] テーブル継承 (single / joined / concrete)
 - [ ] カスタム型 (`TypeDecorator` 相当)
 

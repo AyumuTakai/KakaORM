@@ -22,6 +22,7 @@ Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `p
 - **Eager loading** — `prefetch()` で関連モデルを一括取得。N+1 問題を解消
 - **マイグレーション autogenerate** — `autogenerate()` で差分ファイルを自動生成。`run_files()` + `downgrade()` でファイルベースの管理が可能
 - **CTE（WITH 句）** — `with_cte(name, queryset)` で複雑なクエリを構造化
+- **削除戦略** — `SoftDeleteModel`（論理削除）・`ArchiveModel`（アーカイブ削除）の基底クラスを提供。`delete()` の挙動を継承するだけで切り替えられる
 
 ## インストール
 
@@ -458,6 +459,108 @@ await (
 )
 ```
 
+## 削除戦略
+
+KakaORM は継承する基底クラスを変えるだけで削除の挙動を切り替えられます。
+
+### SoftDeleteModel — 論理削除
+
+`deleted_at` カラムを自動追加し、`delete()` は物理削除ではなく `deleted_at` に現在時刻をセットします。
+
+```python
+from kakaorm import SoftDeleteModel, StrColumn
+
+class Post(SoftDeleteModel):
+    title = StrColumn(nullable=False)
+
+    class Meta:
+        table_name = "post"
+
+# テーブル作成（deleted_at カラムが自動追加される）
+await engine.create_table(Post)
+
+post = await Post.create(title="Hello")
+await post.delete()             # deleted_at をセット（物理削除しない）
+
+# デフォルト: 削除済みを除外
+posts = await Post.all()        # deleted_at IS NULL のみ
+
+# 削除済みも含む
+posts = await Post.include_deleted()
+
+# 削除済みのみ
+posts = await Post.only_deleted()
+
+# 復元
+await post.restore()
+
+# 物理削除
+await Post.only_deleted().purge()
+```
+
+QuerySet レベルの一括操作も同様に動作します。
+
+```python
+await Post.where(Post.title.like("%draft%")).delete()   # 一括論理削除
+await Post.only_deleted().restore()                     # 一括復元
+```
+
+### ArchiveModel — アーカイブ削除
+
+`delete()` はレコードを `archive_{table}` テーブルへ移動します（トランザクション内で INSERT + DELETE）。
+
+```python
+from kakaorm import ArchiveModel, StrColumn
+
+class Log(ArchiveModel):
+    body = StrColumn(nullable=False)
+
+    class Meta:
+        table_name = "log"
+
+# メインテーブルとアーカイブテーブルをそれぞれ作成
+await engine.create_table(Log)
+await engine.create_archive_table(Log)  # archive_log テーブルを作成
+
+log = await Log.create(body="event")
+await log.delete()              # archive_log へ移動（トランザクション保証）
+
+# デフォルト: メインテーブルのみ
+logs = await Log.all()
+
+# UNION ALL で両テーブルを取得
+logs = await Log.include_deleted()
+
+# アーカイブのみ
+logs = await Log.only_deleted()
+
+# メインテーブルへ復元
+await log.restore()
+
+# アーカイブから物理削除
+await Log.only_deleted().purge()
+```
+
+### autogenerate との連携
+
+`ArchiveModel` サブクラスは `autogenerate()` 実行時にアーカイブテーブルも自動的に差分計算の対象に含まれます。
+
+```python
+from kakaorm.migration import VersionedMigrator
+
+migrator = VersionedMigrator(engine)
+# Log テーブルと archive_log テーブルの両方が生成される
+path = await migrator.autogenerate([Log], "./migrations", name="add_log")
+```
+
+### 削除戦略の比較
+
+| 基底クラス | `delete()` の動作 | デフォルト SELECT | `include_deleted()` |
+|---|---|---|---|
+| `Model` | 物理削除 | 全件 | — |
+| `SoftDeleteModel` | `deleted_at` をセット | `deleted_at IS NULL` | フィルタ解除 |
+| `ArchiveModel` | `archive_{table}` へ移動 | メインテーブルのみ | UNION ALL |
+
 ## Raw SQL
 
 ORM で表現が難しいクエリには Raw SQL を使用できます。
@@ -690,6 +793,8 @@ kakaorm/
 │   ├── engine.py            # Engine 基底クラス + AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine, connect()
 │   ├── model.py             # Model 基底クラス, AsyncORMMeta メタクラス
 │   ├── query.py             # QuerySet (遅延クエリビルダ)
+│   ├── soft_delete.py       # SoftDeleteModel / SoftDeleteQuerySet (論理削除)
+│   ├── archive.py           # ArchiveModel / ArchiveQuerySet (アーカイブ削除)
 │   ├── relationship.py      # has_many / has_one / belongs_to デスクリプタ
 │   ├── columns/
 │   │   ├── base.py          # Column[T] 基底クラス, ColumnMeta, WhereClause

@@ -17,6 +17,7 @@ An async-native ORM for Python. Supports PostgreSQL (`asyncpg` / `psycopg3`), SQ
 - **Event hooks** — Define `before_insert` / `after_update` etc. directly on your Model
 - **Relation definitions** — Declare FK navigation (forward and reverse) with `has_many()` / `has_one()` / `belongs_to()`
 - **Pydantic v2 integration** — Implements `__get_pydantic_core_schema__` / `__get_pydantic_json_schema__`; use KakaORM models directly as FastAPI `response_model`
+- **Deletion strategies** — `SoftDeleteModel` (logical deletion) and `ArchiveModel` (archive deletion) base classes; switch `delete()` behavior simply by changing inheritance
 
 ## Installation
 
@@ -417,6 +418,108 @@ await (
 )
 ```
 
+## Deletion Strategies
+
+KakaORM lets you switch deletion behavior simply by changing the base class.
+
+### SoftDeleteModel — Logical deletion
+
+Automatically adds a `deleted_at` column. `delete()` sets `deleted_at` to the current time instead of physically removing the record.
+
+```python
+from kakaorm import SoftDeleteModel, StrColumn
+
+class Post(SoftDeleteModel):
+    title = StrColumn(nullable=False)
+
+    class Meta:
+        table_name = "post"
+
+# Create table (deleted_at column is added automatically)
+await engine.create_table(Post)
+
+post = await Post.create(title="Hello")
+await post.delete()             # Sets deleted_at (no physical deletion)
+
+# Default: exclude deleted records
+posts = await Post.all()        # WHERE deleted_at IS NULL
+
+# Include deleted records
+posts = await Post.include_deleted()
+
+# Only deleted records
+posts = await Post.only_deleted()
+
+# Restore
+await post.restore()
+
+# Physical deletion
+await Post.only_deleted().purge()
+```
+
+Bulk QuerySet operations work the same way:
+
+```python
+await Post.where(Post.title.like("%draft%")).delete()   # Bulk logical delete
+await Post.only_deleted().restore()                     # Bulk restore
+```
+
+### ArchiveModel — Archive deletion
+
+`delete()` moves the record to an `archive_{table}` table within a transaction (INSERT + DELETE).
+
+```python
+from kakaorm import ArchiveModel, StrColumn
+
+class Log(ArchiveModel):
+    body = StrColumn(nullable=False)
+
+    class Meta:
+        table_name = "log"
+
+# Create both main and archive tables
+await engine.create_table(Log)
+await engine.create_archive_table(Log)  # Creates archive_log
+
+log = await Log.create(body="event")
+await log.delete()              # Moves to archive_log (transaction-safe)
+
+# Default: main table only
+logs = await Log.all()
+
+# UNION ALL across both tables
+logs = await Log.include_deleted()
+
+# Archive table only
+logs = await Log.only_deleted()
+
+# Restore to main table
+await log.restore()
+
+# Physical deletion from archive
+await Log.only_deleted().purge()
+```
+
+### autogenerate integration
+
+`ArchiveModel` subclasses are automatically included in the archive table diff when running `autogenerate()`.
+
+```python
+from kakaorm.migration import VersionedMigrator
+
+migrator = VersionedMigrator(engine)
+# Both log and archive_log tables are planned
+path = await migrator.autogenerate([Log], "./migrations", name="add_log")
+```
+
+### Deletion strategy comparison
+
+| Base class | `delete()` behavior | Default SELECT | `include_deleted()` |
+|---|---|---|---|
+| `Model` | Physical delete | All records | — |
+| `SoftDeleteModel` | Set `deleted_at` | `deleted_at IS NULL` | Remove filter |
+| `ArchiveModel` | Move to `archive_{table}` | Main table only | UNION ALL |
+
 ## Raw SQL
 
 Use raw SQL for queries that are hard to express with the ORM.
@@ -607,6 +710,8 @@ kakaorm/
 │   ├── engine.py            # Engine base class + AsyncpgEngine / AioSQLiteEngine / AioMySQLEngine / Psycopg3Engine, connect()
 │   ├── model.py             # Model base class, AsyncORMMeta metaclass
 │   ├── query.py             # QuerySet (lazy query builder)
+│   ├── soft_delete.py       # SoftDeleteModel / SoftDeleteQuerySet (logical deletion)
+│   ├── archive.py           # ArchiveModel / ArchiveQuerySet (archive deletion)
 │   ├── relationship.py      # has_many / has_one / belongs_to descriptors
 │   ├── columns/
 │   │   ├── base.py          # Column[T] base class, ColumnMeta, WhereClause

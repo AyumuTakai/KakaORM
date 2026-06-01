@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-01
+
+### Added
+
+- **SoftDeleteModel** — Logical deletion base class:
+  - `delete()` sets `deleted_at` instead of physically removing the record
+  - `deleted_at` column is added automatically
+  - Default queries exclude soft-deleted records (`deleted_at IS NULL`)
+  - `include_deleted()` — include soft-deleted records in queries
+  - `only_deleted()` — query only soft-deleted records
+  - `restore()` — cancel logical deletion (instance and QuerySet level)
+  - `purge()` — physically delete soft-deleted records
+  - `count()`, `update()`, `aggregate()` respect the deletion filter automatically
+- **ArchiveModel** — Archive deletion base class:
+  - `delete()` moves the record to `archive_{table}` within a transaction (INSERT + DELETE)
+  - Archive table is created separately via `engine.create_archive_table(Model)`
+  - Default queries target the main table only
+  - `include_deleted()` — UNION ALL across main and archive tables
+  - `only_deleted()` — query the archive table only
+  - `restore()` — move record back from archive to main table (instance and QuerySet level)
+  - `purge()` — physically delete from the archive table
+- **`engine.create_archive_table()`** — Creates `archive_{table}` with the same schema as the main table plus an `archived_at` timestamp column
+- **autogenerate archive support** — `autogenerate()` now detects `ArchiveModel` subclasses and includes the archive table in the diff plan automatically
+
+### Changed
+
+- `Migrator.plan()` expands `ArchiveModel` subclasses to also plan their corresponding archive tables
+
+[0.3.0]: https://github.com/AyumuTakai/KakaORM/releases/tag/v0.3.0
+
 ## [0.2.0] - 2026-06-01
 
 ### Added
