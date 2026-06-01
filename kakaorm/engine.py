@@ -667,6 +667,37 @@ class AioMySQLEngine(Engine):
                 rows = await cur.fetchall()
                 return [{k.lower(): v for k, v in row.items()} for row in rows]
 
+    async def _insert(self, instance: Any) -> None:
+        """MySQL 版: RETURNING 非対応のため lastrowid を使用。"""
+        meta = instance._meta
+        pk_name = meta.pk_name
+        is_auto = meta.is_auto_pk
+        cols = [c for c in meta.columns.keys() if instance._data.get(c) is not None or c == pk_name]
+        if is_auto and pk_name in cols:
+            cols.remove(pk_name)
+        values = [meta.columns[c].to_db(instance._data[c]) for c in cols]
+        placeholders = self._placeholders(len(cols))
+
+        # MySQL: RETURNING 非対応のため RETURNING を除外
+        table = self.quote_identifier(meta.table_name)
+        cols_quoted = [self.quote_identifier(c) for c in cols]
+
+        if is_auto:
+            sql = (
+                f"INSERT INTO {table} ({', '.join(cols_quoted)}) "
+                f"VALUES ({placeholders})"
+            )
+            await self._execute(sql, values)
+            # MySQL では lastrowid で最後に挿入された ID を取得
+            new_pk = await self._fetchval("SELECT LAST_INSERT_ID()", [])
+            instance._data[pk_name] = new_pk
+        else:
+            sql = (
+                f"INSERT INTO {table} ({', '.join(cols_quoted)}) "
+                f"VALUES ({placeholders})"
+            )
+            await self._execute(sql, values)
+
     async def _execute(self, sql: str, params: list[Any]) -> int:
         conn = _tx_conn.get()
         if conn:
