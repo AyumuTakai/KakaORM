@@ -386,6 +386,63 @@ Post.views.not_in([1, 2])  # NOT IN
 Post.score.between(1, 5)   # BETWEEN
 ```
 
+### 論理演算子
+
+比較演算子が返す `WhereClause` を `&`（AND）・`|`（OR）・`~`（NOT）で組み合わせることで、複雑な条件を型安全に構築できます。
+
+| 演算子 | SQL | 使い方 |
+|--------|-----|--------|
+| `&` | `AND` | `clause_a & clause_b` |
+| `\|` | `OR` | `clause_a \| clause_b` |
+| `~` | `NOT` | `~clause` |
+| `.where().where()` | `AND` | メソッドチェーン |
+| `.exclude(clause)` | `NOT (clause)` | 否定条件の糖衣構文 |
+
+```python
+# AND: & 演算子
+posts = await Post.where(
+    (Post.published == True) & (Post.views >= 100)
+)
+# WHERE (published = ?) AND (views >= ?)
+
+# OR: | 演算子
+posts = await Post.where(
+    (Post.published == True) | (Post.author_id == 1)
+)
+# WHERE (published = ?) OR (author_id = ?)
+
+# NOT: ~ 演算子
+posts = await Post.where(~(Post.published == False))
+# WHERE NOT (published = ?)
+
+# AND チェーン: .where().where()
+posts = await (
+    Post.where(Post.published == True)
+        .where(Post.views >= 100)
+)
+# WHERE (published = ?) AND (views >= ?)
+# ※ .where() を重ねると常に AND で結合されます
+
+# exclude: NOT の糖衣構文
+posts = await Post.all().exclude(Post.published == False)
+# WHERE NOT (published = ?)
+
+# 複雑な組み合わせ
+from datetime import date
+
+posts = await Post.where(
+    (Post.published == True) &
+    ((Post.views >= 1000) | (Post.author_id.in_([1, 2, 3]))) &
+    ~Post.title.like("%draft%")
+)
+# WHERE (published = ?)
+#   AND ((views >= ?) OR (author_id IN (?,?,?)))
+#   AND NOT (title LIKE ?)
+```
+
+> **優先順位** — Python の演算子優先順位に従い、`~` が最も強く、`&` が `|` より強く結合します。
+> 意図通りの条件になるよう、複合条件には括弧を付けることを推奨します。
+
 ### JOIN / GROUP BY / 集計
 
 ```python
