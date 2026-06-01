@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- HTML UI for `examples/flask_todo.py` — single-page frontend with vanilla JS (add/toggle/delete/filter, toast notifications)
+- `docs/REFERENCE.md` / `docs/REFERENCE.ja.md` — full API reference (column options, QuerySet, relations, migrations, security, etc.)
+- `docs/FLASK.md` / `docs/FLASK.ja.md` — Flask integration guide (engine lifecycle, async views, testing, `.env` usage)
+- `docs/FASTAPI.ja.md` — Japanese FastAPI integration guide
+
+### Changed
+
+- README split into lean overview (~300 lines) + separate reference/integration docs
+- English `README.md` is now the primary README; Japanese version moved to `README.ja.md`
+- "Table Naming — Reserved Words" anti-pattern note added to `docs/REFERENCE.md`
+
+### Fixed
+
+- Quoted `pip install "kakaorm[extras]"` in all example files to fix zsh glob expansion error
+- All relative links in README files replaced with absolute GitHub URLs (fixes broken links on PyPI)
+- `pip install` instructions in examples now include `kakaorm` itself
+
+### Removed
+
+- `RESERVED_WORD_SUPPORT.md` — relevant content merged into `docs/REFERENCE.md`
+
+---
+
+## [0.3.3] - 2026-06-01
+
+### Fixed
+
+- Replace `typer[all]` with `typer` in dependencies — the `[all]` extra no longer exists in typer 0.12+, causing a warning on install
+
+### Changed
+
+- Add CLI PATH troubleshooting note to README with `python -m kakaorm` as an alternative
+
+---
+
+## [0.3.2] - 2026-06-01
+
+### Changed
+
+- English README (`README.en.md`) is now the primary `README.md`; Japanese version renamed to `README.ja.md`
+- All relative links replaced with absolute GitHub URLs so links work correctly on both PyPI and GitHub
+
+---
+
+## [0.3.1] - 2026-06-01
+
+### Fixed
+
+- Correct GitHub repository URL casing in `pyproject.toml` (`ayumu-takai` → `AyumuTakai`)
+
+---
+
 ## [0.3.0] - 2026-06-01
 
 ### Added
