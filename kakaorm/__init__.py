@@ -9,6 +9,7 @@ from kakaorm.engine import (
     connect,
 )
 from kakaorm.model import Model
+from kakaorm.soft_delete import SoftDeleteModel
 from kakaorm.columns.types import (
     IntColumn,
     StrColumn,
@@ -57,6 +58,7 @@ __all__ = [
     "connect",
     # Model
     "Model",
+    "SoftDeleteModel",
     # Column types
     "IntColumn",
     "StrColumn",
