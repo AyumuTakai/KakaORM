@@ -1,5 +1,7 @@
 # KakaORM
 
+[日本語](README.md)
+
 [![CI](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml/badge.svg)](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/kakaorm.svg)](https://pypi.org/project/kakaorm/)
 [![Python](https://img.shields.io/pypi/pyversions/kakaorm.svg)](https://pypi.org/project/kakaorm/)
@@ -17,6 +19,9 @@ An async-native ORM for Python. Supports PostgreSQL (`asyncpg` / `psycopg3`), SQ
 - **Event hooks** — Define `before_insert` / `after_update` etc. directly on your Model
 - **Relation definitions** — Declare FK navigation (forward and reverse) with `has_many()` / `has_one()` / `belongs_to()`
 - **Pydantic v2 integration** — Implements `__get_pydantic_core_schema__` / `__get_pydantic_json_schema__`; use KakaORM models directly as FastAPI `response_model`
+- **Eager loading** — Batch-fetch related models with `prefetch()` to eliminate N+1 queries
+- **Migration autogenerate** — Auto-generate diff files with `autogenerate()`; manage with `run_files()` + `downgrade()`
+- **CTE (WITH clause)** — Structure complex queries with `with_cte(name, queryset)`
 - **Deletion strategies** — `SoftDeleteModel` (logical deletion) and `ArchiveModel` (archive deletion) base classes; switch `delete()` behavior simply by changing inheritance
 
 ## Installation
@@ -161,7 +166,10 @@ StrColumn(max_length=255)          # → VARCHAR(255)
 IntColumn(auto_increment=True)     # → SERIAL PRIMARY KEY (PG) / AUTOINCREMENT (SQLite)
 DateTimeColumn(auto_now_add=True)  # set current time automatically on INSERT
 DateTimeColumn(auto_now=True)      # update current time automatically on UPDATE
-ForeignKey(Author, on_delete="CASCADE")
+ForeignKey(Author, on_delete="CASCADE")    # default: CASCADE
+ForeignKey(Author, on_delete="SET NULL")   # set referencing column to NULL
+ForeignKey(Author, on_delete="RESTRICT")   # prevent deletion
+ForeignKey(Author, on_delete="NO ACTION")  # database default behavior
 DecimalColumn(max_digits=10, decimal_places=2)  # NUMERIC(10, 2)
 ```
 
@@ -189,6 +197,10 @@ author = await Author.get_or_none(Author.id == 1)
 # First / last
 first = await Author.first()
 last  = await Author.last()
+
+# As a dict
+author = await Author.get(Author.id == 1)
+data = author.to_dict()         # {"id": 1, "name": "Alice", "email": "..."}
 ```
 
 ### Update
@@ -295,17 +307,69 @@ posts  = await author.posts         # → list[Post]
 
 ### Relation Types
 
-| Method        | Use case              | Return type       |
-|---------------|-----------------------|-------------------|
-| `has_many()`  | 1-to-many reverse     | `list[Model]`     |
-| `has_one()`   | 1-to-1 reverse        | `Model \| None`   |
-| `belongs_to()`| Many-to-1 forward FK  | `Model \| None`   |
+| Method         | Use case                         | Return type      |
+|----------------|----------------------------------|------------------|
+| `has_many()`   | 1-to-many reverse (FK on other)  | `list[Model]`    |
+| `has_one()`    | 1-to-1 reverse (FK on other)     | `Model \| None`  |
+| `belongs_to()` | Many-to-1 forward FK             | `Model \| None`  |
 
 You can pass the class name as a string to `related_model` to avoid circular imports:
 
 ```python
 posts = has_many("Post", foreign_key="author_id")
 ```
+
+**`has_one()` example** — Author with a one-to-one Profile:
+
+```python
+from kakaorm import Model, StrColumn, IntColumn, ForeignKey, has_one, belongs_to
+
+class Author(Model):
+    name    = StrColumn(nullable=False)
+    profile = has_one("Profile", foreign_key="author_id")  # FK is on Profile
+
+    class Meta:
+        table_name = "author"
+
+class Profile(Model):
+    bio       = StrColumn(nullable=True)
+    author_id = ForeignKey(Author, nullable=False)
+    author    = belongs_to(Author, foreign_key="author_id")
+
+    class Meta:
+        table_name = "profile"
+
+author  = await Author.get(Author.id == 1)
+profile = await author.profile   # → Profile | None (queried by author_id == author.id)
+```
+
+### Eager Loading (N+1 elimination)
+
+`prefetch()` batch-fetches related models in a single query and caches the results.
+
+```python
+# Without prefetch — N+1 queries
+posts = await Post.all()
+for post in posts:
+    author = await post.author  # fires a SELECT per post
+
+# With prefetch — 2 queries total
+posts = await Post.all().prefetch("author")
+for post in posts:
+    author = await post.author  # served from cache, no extra query
+
+# Prefetch multiple relations at once
+posts = await Post.all().prefetch("author", "comments")
+```
+
+Performance comparison:
+
+| Case | Records | SQL queries |
+|------|---------|-------------|
+| Without prefetch | 10 | 11 (1 + 10) |
+| Without prefetch | 100 | 101 (1 + 100) |
+| With prefetch | 10 | 2 |
+| With prefetch | 100 | 2 |
 
 ## QuerySet — Query Builder
 
@@ -332,14 +396,19 @@ posts = await (
         .offset(20)
 )
 
-# SELECT specific columns
+# SELECT specific columns (replaces existing SELECT)
 rows = await Post.all().select(Post.title, Post.views)
+
+# Append columns to an existing SELECT (does not replace)
+base = Post.all().select(Post.id, Post.title)
+rows = await base.also_select(Post.views, Post.author_id)
+# → SELECT id, title, views, author_id FROM post
 
 # COUNT / EXISTS
 n      = await Post.where(Post.published == True).count()
 exists = await Post.where(Post.title.like("%Python%")).exists()
 
-# Async iteration
+# Async iteration (QuerySet supports async for)
 async for post in Post.all().order_by(Post.views.desc):
     print(post.title)
 ```
@@ -360,7 +429,64 @@ Post.title.ilike("a%")     # ILIKE
 Post.views.in_([1, 2, 3])  # IN
 Post.views.not_in([1, 2])  # NOT IN
 Post.score.between(1, 5)   # BETWEEN
+Post.score.is_null()       # IS NULL  (equivalent to == None)
+Post.score.is_not_null()   # IS NOT NULL  (equivalent to != None)
 ```
+
+### Logical Operators
+
+Combine `WhereClause` values returned by comparison operators using `&` (AND), `|` (OR), and `~` (NOT) to build complex, type-safe conditions.
+
+| Operator | SQL | Usage |
+|----------|-----|-------|
+| `&` | `AND` | `clause_a & clause_b` |
+| `\|` | `OR` | `clause_a \| clause_b` |
+| `~` | `NOT` | `~clause` |
+| `.where().where()` | `AND` | method chaining |
+| `.exclude(clause)` | `NOT (clause)` | syntactic sugar for negation |
+
+```python
+# AND: & operator
+posts = await Post.where(
+    (Post.published == True) & (Post.views >= 100)
+)
+# WHERE (published = ?) AND (views >= ?)
+
+# OR: | operator
+posts = await Post.where(
+    (Post.published == True) | (Post.author_id == 1)
+)
+# WHERE (published = ?) OR (author_id = ?)
+
+# NOT: ~ operator
+posts = await Post.where(~(Post.published == False))
+# WHERE NOT (published = ?)
+
+# AND chaining: .where().where()
+posts = await (
+    Post.where(Post.published == True)
+        .where(Post.views >= 100)
+)
+# WHERE (published = ?) AND (views >= ?)
+# ※ Each .where() call is always joined with AND
+
+# exclude: syntactic sugar for NOT
+posts = await Post.all().exclude(Post.published == False)
+# WHERE NOT (published = ?)
+
+# Complex compound conditions
+posts = await Post.where(
+    (Post.published == True) &
+    ((Post.views >= 1000) | (Post.author_id.in_([1, 2, 3]))) &
+    ~Post.title.like("%draft%")
+)
+# WHERE (published = ?)
+#   AND ((views >= ?) OR (author_id IN (?,?,?)))
+#   AND NOT (title LIKE ?)
+```
+
+> **Precedence** — Python's operator precedence applies: `~` binds most tightly, then `&`, then `|`.
+> Use parentheses for compound conditions to ensure the intended grouping.
 
 ### JOIN / GROUP BY / Aggregation
 
@@ -382,6 +508,23 @@ rows = await (
         .group_by(Author.id, Author.name)
 )
 
+# RIGHT JOIN
+rows = await (
+    Post.all()
+        .right_join(Author, on=Post.author_id == Author.id)
+        .select(Post.title, Author.name)
+)
+
+# Subquery (IN / NOT IN)
+from kakaorm import Subquery
+
+active_authors = Author.where(Author.is_active == True).select(Author.id)
+posts = await Post.where(Post.author_id.in_(Subquery(active_authors)))
+# WHERE author_id IN (SELECT id FROM author WHERE is_active = ?)
+
+# Passing a QuerySet directly works the same way
+posts = await Post.where(Post.author_id.in_(active_authors))
+
 # Aggregation
 total = await Post.all().sum(Post.views)
 stats = await Post.all().aggregate(
@@ -398,6 +541,204 @@ rows = await (
 )
 ```
 
+### Aggregate Functions
+
+#### Quick Aggregate Methods
+
+`QuerySet` provides shortcut methods that return a single aggregated value.
+
+```python
+# Count
+n = await Post.all().count()                            # COUNT(*)
+n = await Post.where(Post.published == True).count()    # with WHERE
+
+# Sum / Average / Max / Min
+total = await Post.all().sum(Post.views)
+avg   = await Post.all().avg(Post.score)
+hi    = await Post.all().max(Post.views)
+lo    = await Post.all().min(Post.score)
+
+# Existence check
+has_draft = await Post.where(Post.published == False).exists()  # bool
+```
+
+#### aggregate() — Multiple Aggregates in One Query
+
+Retrieve multiple aggregated values in a single SQL statement.
+
+```python
+from kakaorm import Sum, Avg, Max, Min, Count
+
+stats = await Post.all().aggregate(
+    total_views = Sum(Post.views),
+    avg_score   = Avg(Post.score),
+    max_views   = Max(Post.views),
+    post_count  = Count(Post.id),
+)
+# {
+#   "total_views": 12500,
+#   "avg_score": 3.8,
+#   "max_views": 2000,
+#   "post_count": 42
+# }
+
+# Combined with WHERE filters
+stats = await Post.where(Post.published == True).aggregate(
+    published_views = Sum(Post.views),
+    published_count = Count(Post.id),
+)
+```
+
+#### Aggregate Classes in SELECT
+
+Pass aggregate classes to `select()` to mix columns and aggregate values in the result. Use `.label()` to name the result key.
+
+| Class | SQL function | Argument |
+|-------|-------------|----------|
+| `Count(col)` | `COUNT(col)` | Omit for `COUNT(*)` |
+| `Sum(col)` | `SUM(col)` | Required |
+| `Avg(col)` | `AVG(col)` | Required |
+| `Max(col)` | `MAX(col)` | Required |
+| `Min(col)` | `MIN(col)` | Required |
+
+```python
+from kakaorm import Count, Sum, Avg
+
+rows = await (
+    Post.all()
+        .select(
+            Post.author_id,
+            Count(Post.id).label("post_count"),
+            Sum(Post.views).label("total_views"),
+            Avg(Post.score).label("avg_score"),
+        )
+        .group_by(Post.author_id)
+)
+# [
+#   {"author_id": 1, "post_count": 3, "total_views": 3600, "avg_score": 4.0},
+#   {"author_id": 2, "post_count": 1, "total_views":  100, "avg_score": 3.5},
+# ]
+```
+
+#### GROUP BY / HAVING
+
+Use `.group_by()` to group results and `.having()` to filter after aggregation.
+Aggregate class comparison operators (`==`, `!=`, `>`, `>=`, `<`, `<=`) generate HAVING conditions.
+
+```python
+from kakaorm import Count, Sum
+
+# Authors with 2 or more posts
+rows = await (
+    Post.all()
+        .select(Post.author_id, Count(Post.id).label("cnt"))
+        .group_by(Post.author_id)
+        .having(Count(Post.id) >= 2)
+)
+
+# Authors with total views >= 1000 AND at least 3 posts
+rows = await (
+    Post.all()
+        .select(Post.author_id, Sum(Post.views).label("views"))
+        .group_by(Post.author_id)
+        .having(Sum(Post.views) >= 1000)
+        .having(Count(Post.id) >= 3)     # chained .having() joins with AND
+)
+
+# Sort by aggregate result
+rows = await (
+    Post.all()
+        .select(Post.author_id, Count(Post.id).label("cnt"))
+        .group_by(Post.author_id)
+        .order_by(Count(Post.id).desc)
+)
+```
+
+#### Window Functions
+
+Classes generating `OVER (PARTITION BY ... ORDER BY ...)` clauses.
+Window functions can only be used in `select()` (not in `where()` / `having()`).
+
+```python
+from kakaorm import RowNumber, Rank, DenseRank, Lag, Lead, Sum, Avg
+
+# Row number per author, ordered by views
+rows = await Post.all().select(
+    Post.title,
+    Post.author_id,
+    Post.views,
+    RowNumber().over(
+        partition_by=[Post.author_id],
+        order_by=[Post.views],
+    ).label("row_num"),
+)
+
+# Global ranking (with ties)
+rows = await Post.all().select(
+    Post.title,
+    Post.views,
+    Rank().over(order_by=[Post.views]).label("rank"),
+    DenseRank().over(order_by=[Post.views]).label("dense_rank"),
+)
+
+# Preceding row value (LAG)
+rows = await Post.all().select(
+    Post.title,
+    Post.views,
+    Lag(Post.views, 1, 0).over(order_by=[Post.views]).label("prev_views"),
+)
+
+# Following row value (LEAD)
+rows = await Post.all().select(
+    Post.title,
+    Post.views,
+    Lead(Post.views, 1, 0).over(order_by=[Post.views]).label("next_views"),
+)
+
+# Cumulative sum (SUM OVER)
+rows = await Post.all().select(
+    Post.title,
+    Post.views,
+    Sum(Post.views).over(
+        partition_by=[Post.author_id],
+        order_by=[Post.views],
+    ).label("cumulative_views"),
+)
+```
+
+Available window function classes:
+
+| Class | SQL | Description |
+|-------|-----|-------------|
+| `RowNumber()` | `ROW_NUMBER()` | Unique sequential row number |
+| `Rank()` | `RANK()` | Ties share rank; next rank is skipped |
+| `DenseRank()` | `DENSE_RANK()` | Ties share rank; next rank is not skipped |
+| `Lag(col, n, default)` | `LAG(col, n, default)` | Value n rows before |
+| `Lead(col, n, default)` | `LEAD(col, n, default)` | Value n rows after |
+| `Sum(col).over(...)` | `SUM(col) OVER (...)` | Running total |
+| `Avg(col).over(...)` | `AVG(col) OVER (...)` | Moving average |
+| `Max(col).over(...)` | `MAX(col) OVER (...)` | Window maximum |
+| `Min(col).over(...)` | `MIN(col) OVER (...)` | Window minimum |
+
+> **Note** Window functions are not supported by SQLite. Use PostgreSQL, MySQL 8.0+, or MariaDB 10.2+.
+
+### CTE (WITH clause)
+
+```python
+# Define high-earning departments as a CTE, then JOIN
+high_earners = (
+    Employee.where(Employee.salary >= 1000)
+            .select(Employee.dept_id)
+)
+rows = await (
+    Department.all()
+              .with_cte("rich_depts", high_earners)
+              .join(Employee, on=Employee.dept_id == Department.id)
+              .select(Department.name, Employee.name)
+              .where(Employee.salary >= 1000)
+)
+```
+
 ### UPDATE Expressions (column references)
 
 ```python
@@ -407,6 +748,36 @@ await Post.all().update(published=True)
 # Expression with column reference
 await Post.all().update(views=Post.views + 1)
 await Product.all().update(price=Product.price * 0.97)
+```
+
+### CASE WHEN Expressions
+
+Use `Case` and `When` to express SQL `CASE WHEN ... THEN ... ELSE ... END`.
+Usable both in `select()` column lists and `update()` SET values.
+
+```python
+from kakaorm import Case, When
+
+# In SELECT: compute a category label based on age
+rows = await User.all().select(
+    User.id,
+    User.name,
+    Case(
+        When(User.age >= 18, then="adult"),
+        When(User.age >= 13, then="teen"),
+        default="child",
+    ).label("category"),
+)
+# → [{"id": 1, "name": "Alice", "category": "adult"}, ...]
+
+# In UPDATE: bulk-update tier based on price range
+await Product.all().update(
+    tier=Case(
+        When(Product.price >= 10000, then="premium"),
+        When(Product.price >= 3000,  then="standard"),
+        default="budget",
+    )
+)
 ```
 
 ### INSERT ... SELECT
@@ -552,6 +923,8 @@ async with engine.transaction():
 
 ## Migrations
 
+### Manual Migrations
+
 ```python
 from kakaorm.migration import Migrator
 
@@ -559,17 +932,106 @@ migrator = Migrator(engine)
 
 # Preview the migration plan
 plan = await migrator.plan([Author, Post])
-print(plan.sql)
+print(plan.sql)       # UP SQL
+print(plan.down_sql)  # DOWN SQL (reverse order)
 
-# Apply
+# Apply / rollback
 await plan.apply()
+await plan.apply_down()  # rollback
 
 # Destructive plan including column drops
 plan = await migrator.plan_with_drop([Author, Post])
 await plan.apply()
 ```
 
+### File-based Migrations (recommended)
+
+```python
+from kakaorm.migration import VersionedMigrator
+
+migrator = VersionedMigrator(engine)
+
+# 1. Auto-generate a migration file from model-vs-DB diff
+path = await migrator.autogenerate([User, Post], "./migrations", name="add_bio")
+# → migrations/0001_add_bio.py is created
+
+# 2. Apply all pending migrations
+n = await migrator.run_files("./migrations")
+
+# 3. Roll back the latest migration
+await migrator.downgrade(steps=1)
+
+# View migration history
+for record in await migrator.history():
+    print(record.name, record.applied_at)
+```
+
+Generated migration file format:
+
+```python
+# migrations/0001_add_bio.py
+# Auto-generated by KakaORM
+
+up = [
+    "ALTER TABLE user ADD COLUMN bio TEXT DEFAULT NULL",
+]
+
+down = [
+    "ALTER TABLE user DROP COLUMN bio",
+]
+```
+
+## CLI Commands
+
+After `pip install kakaorm`, the `kakaorm` command is available.
+
+```bash
+# Initialize project (creates migrations/ directory and config)
+kakaorm init
+
+# Generate a migration file from model-vs-DB diff
+kakaorm makemigrations --models myapp.models --db sqlite+aiosqlite:///./dev.db --name add_user_bio
+
+# Apply all pending migrations
+kakaorm migrate --db sqlite+aiosqlite:///./dev.db
+
+# Roll back the latest N migrations
+kakaorm migrate --db sqlite+aiosqlite:///./dev.db --direction down --steps 1
+
+# Show migration history
+kakaorm showmigrations --db sqlite+aiosqlite:///./dev.db
+```
+
+| Command | Description |
+|---|---|
+| `init` | Initialize `migrations/` directory and config file |
+| `makemigrations` | Output a migration file from model-vs-DB diff |
+| `migrate` | Apply pending migrations (`--direction down` to roll back) |
+| `showmigrations` | Display migration history as a table |
+
 ## Database Connections
+
+```bash
+# SQLite (development / testing)
+pip install fastapi uvicorn kakaorm aiosqlite
+
+# PostgreSQL (asyncpg)
+pip install fastapi uvicorn kakaorm asyncpg
+
+# PostgreSQL (psycopg3)
+pip install fastapi uvicorn kakaorm "psycopg[binary]" psycopg-pool
+
+# MySQL / MariaDB
+pip install fastapi uvicorn kakaorm aiomysql
+```
+
+| DB | URL format |
+|---|---|
+| SQLite (file) | `sqlite+aiosqlite:///./app.db` |
+| SQLite (in-memory) | `sqlite+aiosqlite:///:memory:` |
+| PostgreSQL (asyncpg) | `postgresql+asyncpg://user:password@localhost/dbname` |
+| PostgreSQL (psycopg3) | `postgresql+psycopg3://user:password@localhost/dbname` |
+| MySQL / MariaDB | `mysql+aiomysql://user:password@localhost:3306/dbname` |
 
 ```python
 # SQLite (development / testing)
@@ -610,7 +1072,7 @@ class Todo(Model):
     class Meta:
         table_name = "todo"
 
-# Request body schema (input validation)
+# Request body schema (input validation only)
 class TodoCreate(BaseModel):
     title: str
     description: str | None = None
@@ -648,7 +1110,6 @@ Swagger UI (`/docs`) automatically outputs type information for `id` / `title` /
 Start:
 
 ```bash
-pip install fastapi uvicorn aiosqlite
 python examples/fastapi_todo.py
 # View Swagger UI at http://localhost:8000/docs
 ```
@@ -694,8 +1155,8 @@ KakaORM always treats query values as bind parameters to prevent SQL injection.
 > results = await Post.all().order_by(f"{col} DESC")
 > ```
 >
-> Also note that `create()` / `save()` do not restrict writes to privileged fields.
-> Exclude privileged fields such as `is_admin` from user input at the application layer.
+> Also note that `create()` / `save()` do not restrict writes to privileged fields (e.g. `is_admin`).
+> Exclude such fields from user input at the application layer.
 
 ## Project Structure
 

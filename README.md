@@ -166,7 +166,10 @@ StrColumn(max_length=255)          # → VARCHAR(255)
 IntColumn(auto_increment=True)     # → SERIAL PRIMARY KEY (PG) / AUTOINCREMENT (SQLite)
 DateTimeColumn(auto_now_add=True)  # INSERT 時に現在時刻を自動設定
 DateTimeColumn(auto_now=True)      # UPDATE 時に現在時刻を自動更新
-ForeignKey(Author, on_delete="CASCADE")
+ForeignKey(Author, on_delete="CASCADE")    # デフォルト: CASCADE
+ForeignKey(Author, on_delete="SET NULL")   # 参照元を NULL にする
+ForeignKey(Author, on_delete="RESTRICT")   # 削除を禁止
+ForeignKey(Author, on_delete="NO ACTION")  # DB デフォルト動作
 DecimalColumn(max_digits=10, decimal_places=2)  # NUMERIC(10, 2)
 ```
 
@@ -194,6 +197,10 @@ author = await Author.get_or_none(Author.id == 1)
 # 先頭 / 末尾
 first = await Author.first()
 last  = await Author.last()
+
+# dict 形式で取得
+author = await Author.get(Author.id == 1)
+data = author.to_dict()         # {"id": 1, "name": "Alice", "email": "..."}
 ```
 
 ### 更新
@@ -303,13 +310,37 @@ posts  = await author.posts         # → list[Post]
 | メソッド | 用途 | 戻り値 |
 |----------|------|--------|
 | `has_many()` | 1対多の逆参照 | `list[Model]` |
-| `has_one()` | 1対1の逆参照 | `Model \| None` |
+| `has_one()` | 1対1の逆参照（FK は相手側） | `Model \| None` |
 | `belongs_to()` | 多対1の前向き FK | `Model \| None` |
 
 `related_model` には文字列でクラス名を渡すことも可能です（循環 import 回避）。
 
 ```python
 posts = has_many("Post", foreign_key="author_id")
+```
+
+**`has_one()` の使用例** — 著者と 1 対 1 で対応するプロフィール:
+
+```python
+from kakaorm import Model, StrColumn, IntColumn, ForeignKey, has_one, belongs_to
+
+class Author(Model):
+    name    = StrColumn(nullable=False)
+    profile = has_one("Profile", foreign_key="author_id")  # FK は Profile 側
+
+    class Meta:
+        table_name = "author"
+
+class Profile(Model):
+    bio       = StrColumn(nullable=True)
+    author_id = ForeignKey(Author, nullable=False)
+    author    = belongs_to(Author, foreign_key="author_id")
+
+    class Meta:
+        table_name = "profile"
+
+author  = await Author.get(Author.id == 1)
+profile = await author.profile   # → Profile | None（author_id == author.id で検索）
 ```
 
 ### Eager loading（N+1 解消）
@@ -356,14 +387,19 @@ posts = await (
         .offset(20)
 )
 
-# 特定カラムのみ SELECT
+# 特定カラムのみ SELECT（既存 SELECT を置換）
 rows = await Post.all().select(Post.title, Post.views)
+
+# 既存の SELECT に列を追加（置換しない）
+base  = Post.all().select(Post.id, Post.title)
+rows  = await base.also_select(Post.views, Post.author_id)
+# → SELECT id, title, views, author_id FROM post
 
 # COUNT / EXISTS
 n      = await Post.where(Post.published == True).count()
 exists = await Post.where(Post.title.like("%Python%")).exists()
 
-# 非同期イテレーション
+# 非同期イテレーション（QuerySet は async for に対応）
 async for post in Post.all().order_by(Post.views.desc):
     print(post.title)
 ```
@@ -384,6 +420,8 @@ Post.title.ilike("a%")     # ILIKE
 Post.views.in_([1, 2, 3])  # IN
 Post.views.not_in([1, 2])  # NOT IN
 Post.score.between(1, 5)   # BETWEEN
+Post.score.is_null()       # IS NULL  (== None と同等)
+Post.score.is_not_null()   # IS NOT NULL  (!= None と同等)
 ```
 
 ### 論理演算子
@@ -462,6 +500,23 @@ rows = await (
         .select(Author.name, Count(Post.id).label("post_count"))
         .group_by(Author.id, Author.name)
 )
+
+# RIGHT JOIN
+rows = await (
+    Post.all()
+        .right_join(Author, on=Post.author_id == Author.id)
+        .select(Post.title, Author.name)
+)
+
+# サブクエリ（IN / NOT IN）
+from kakaorm import Subquery
+
+active_authors = Author.where(Author.is_active == True).select(Author.id)
+posts = await Post.where(Post.author_id.in_(Subquery(active_authors)))
+# WHERE author_id IN (SELECT id FROM author WHERE is_active = ?)
+
+# QuerySet をそのまま渡しても同じ動作をする
+posts = await Post.where(Post.author_id.in_(active_authors))
 
 # 集計
 total = await Post.all().sum(Post.views)
@@ -688,6 +743,36 @@ await Post.all().update(views=Post.views + 1)
 await Product.all().update(price=Product.price * 0.97)
 ```
 
+### CASE WHEN 式
+
+`Case` と `When` を使って SQL の `CASE WHEN ... THEN ... ELSE ... END` を表現します。  
+`select()` の列指定と `update()` の SET 値の両方で使えます。
+
+```python
+from kakaorm import Case, When
+
+# SELECT での使用: 年齢カテゴリをラベルとして取得
+rows = await User.all().select(
+    User.id,
+    User.name,
+    Case(
+        When(User.age >= 18, then="adult"),
+        When(User.age >= 13, then="teen"),
+        default="child",
+    ).label("category"),
+)
+# → [{"id": 1, "name": "Alice", "category": "adult"}, ...]
+
+# UPDATE での使用: 価格帯に応じてランクを一括更新
+await Product.all().update(
+    tier=Case(
+        When(Product.price >= 10000, then="premium"),
+        When(Product.price >= 3000,  then="standard"),
+        default="budget",
+    )
+)
+```
+
 ### INSERT ... SELECT
 
 ```python
@@ -888,6 +973,34 @@ down = [
     "ALTER TABLE user DROP COLUMN bio",
 ]
 ```
+
+## CLI コマンド
+
+`pip install kakaorm` でインストールすると `kakaorm` コマンドが使えます。
+
+```bash
+# プロジェクト初期化（migrations/ ディレクトリとコンフィグを生成）
+kakaorm init
+
+# モデルと DB の差分からマイグレーションファイルを生成
+kakaorm makemigrations --models myapp.models --db sqlite+aiosqlite:///./dev.db --name add_user_bio
+
+# 未適用マイグレーションをすべて適用
+kakaorm migrate --db sqlite+aiosqlite:///./dev.db
+
+# 直近 N 件をロールバック
+kakaorm migrate --db sqlite+aiosqlite:///./dev.db --direction down --steps 1
+
+# 適用済みマイグレーション履歴を表示
+kakaorm showmigrations --db sqlite+aiosqlite:///./dev.db
+```
+
+| コマンド | 説明 |
+|---|---|
+| `init` | `migrations/` ディレクトリと設定ファイルを初期化する |
+| `makemigrations` | モデル定義と DB スキーマの差分をファイルに出力する |
+| `migrate` | 未適用マイグレーションを適用する（`--direction down` でロールバック） |
+| `showmigrations` | 適用履歴をテーブル形式で表示する |
 
 ## DB 接続
 
