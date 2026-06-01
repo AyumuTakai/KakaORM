@@ -58,9 +58,9 @@ dev = [
 kakaorm = "kakaorm.cli:main"
 
 [project.urls]
-Homepage   = "https://github.com/ayumu-takai/kakaorm"
-Repository = "https://github.com/ayumu-takai/kakaorm"
-Issues     = "https://github.com/ayumu-takai/kakaorm/issues"
+Homepage   = "https://github.com/AyumuTakai/kakaorm"
+Repository = "https://github.com/AyumuTakai/kakaorm"
+Issues     = "https://github.com/AyumuTakai/kakaorm/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["kakaorm"]
