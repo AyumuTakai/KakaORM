@@ -1,11 +1,11 @@
 # KakaORM
 
-[English](README.en.md)
+[English](https://github.com/AyumuTakai/KakaORM/blob/main/README.en.md)
 
 [![CI](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml/badge.svg)](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/kakaorm.svg)](https://pypi.org/project/kakaorm/)
 [![Python](https://img.shields.io/pypi/pyversions/kakaorm.svg)](https://pypi.org/project/kakaorm/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/AyumuTakai/KakaORM/blob/main/LICENSE)
 
 Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `psycopg3`)、SQLite (`aiosqlite`)、MySQL/MariaDB (`aiomysql`) をバックエンドとして使用でき、Django ORM ライクなモデル定義と型安全なクエリ構築を提供します。
 
@@ -1087,7 +1087,7 @@ python examples/fastapi_todo.py
 # http://localhost:8000/docs で Swagger UI を確認
 ```
 
-詳細なガイド、実装パターン、テスト戦略は [FastAPI 統合ガイド](docs/FASTAPI.md) を参照してください。
+詳細なガイド、実装パターン、テスト戦略は [FastAPI 統合ガイド](https://github.com/AyumuTakai/KakaORM/blob/main/docs/FASTAPI.md) を参照してください。
 その他の実装例：
 - `examples/fastapi_advanced.py` — 依存性注入、複数モデル、エラー処理
 - `examples/fastapi_pagination.py` — ページング & フィルタリング
@@ -1197,4 +1197,4 @@ pytest tests/test_mysql.py
 
 ## ライセンス
 
-[MIT License](LICENSE)
+[MIT License](https://github.com/AyumuTakai/KakaORM/blob/main/LICENSE)

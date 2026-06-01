@@ -1,11 +1,11 @@
 # KakaORM
 
-[日本語](README.md)
+[日本語](https://github.com/AyumuTakai/KakaORM/blob/main/README.md)
 
 [![CI](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml/badge.svg)](https://github.com/AyumuTakai/KakaORM/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/kakaorm.svg)](https://pypi.org/project/kakaorm/)
 [![Python](https://img.shields.io/pypi/pyversions/kakaorm.svg)](https://pypi.org/project/kakaorm/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/AyumuTakai/KakaORM/blob/main/LICENSE)
 
 An async-native ORM for Python. Supports PostgreSQL (`asyncpg` / `psycopg3`), SQLite (`aiosqlite`), and MySQL/MariaDB (`aiomysql`) as backends, providing Django ORM-like model definitions and type-safe query building.
 
@@ -1114,7 +1114,7 @@ python examples/fastapi_todo.py
 # View Swagger UI at http://localhost:8000/docs
 ```
 
-For detailed integration patterns, best practices, and testing strategies, see [FastAPI Integration Guide](docs/FASTAPI.md).
+For detailed integration patterns, best practices, and testing strategies, see [FastAPI Integration Guide](https://github.com/AyumuTakai/KakaORM/blob/main/docs/FASTAPI.md).
 Additional examples:
 - `examples/fastapi_advanced.py` — Dependency injection, multiple models, error handling
 - `examples/fastapi_pagination.py` — Pagination & filtering
@@ -1224,4 +1224,4 @@ pytest tests/test_mysql.py
 
 ## License
 
-[MIT License](LICENSE)
+[MIT License](https://github.com/AyumuTakai/KakaORM/blob/main/LICENSE)
