@@ -434,8 +434,6 @@ class ArchiveModel(Model):
         pk_val  = self._data.get(pk_name)
         if pk_val is None:
             raise ValueError("Cannot restore an unsaved model instance.")
-        archive = self._archive_table_name()
-        engine  = self._engine
         pk_col  = getattr(type(self), pk_name)
         # ArchiveQuerySet の only_deleted().where(pk) を使って復元
         await type(self).only_deleted().where(pk_col == pk_val).restore()
