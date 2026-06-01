@@ -985,6 +985,15 @@ down = [
 
 After `pip install kakaorm`, the `kakaorm` command is available.
 
+> **If the command is not found after installation**, your Python's `bin` directory may not be in `PATH`.
+> Run `python -m kakaorm` as an alternative, or add the directory to `PATH`:
+> ```bash
+> # Check where the script was installed
+> python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+> # Then add that path to your shell profile (e.g. ~/.zshrc or ~/.bashrc)
+> export PATH="$PATH:/path/to/python/bin"
+> ```
+
 ```bash
 # Initialize project (creates migrations/ directory and config)
 kakaorm init
