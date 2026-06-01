@@ -102,6 +102,40 @@ class TestBulkUpdateBatching:
         assert count == 5
 
 
+class TestBulkUpdateValidation:
+    async def test_validation_runs_before_update(self, engine):
+        """bulk_update() はバリデーターを通過してから UPDATE する。"""
+        import kakaorm
+        from kakaorm import Model, StrColumn, ValidationError
+        from kakaorm.validators import min_length
+
+        class StrictModel(Model):
+            name = StrColumn(nullable=False, validators=[min_length(3)])
+
+            class Meta:
+                table_name = "strict_model_bu"
+
+        await engine.create_table(StrictModel)
+        instance = StrictModel.__new__(StrictModel)
+        instance._data = {"id": 1, "name": "ok"}
+        instance._is_new = False
+
+        instance.name = "x"  # too short
+        with pytest.raises(ValidationError) as exc_info:
+            await StrictModel.bulk_update([instance], fields=["name"])
+        assert "name" in exc_info.value.errors
+
+    async def test_valid_bulk_update_passes_validation(self, engine):
+        """バリデーションを通過した場合は正常に UPDATE される。"""
+        instances = [await Author.create(name=f"Val{i}", email=f"v{i}@example.com") for i in range(3)]
+        for inst in instances:
+            inst.name = "Valid"
+        await Author.bulk_update(instances, fields=["name"])
+        for inst in instances:
+            fetched = await Author.get(Author.id == inst.id)
+            assert fetched.name == "Valid"
+
+
 class TestBulkUpdateTransaction:
     async def test_bulk_update_in_transaction_commits(self, engine):
         """トランザクション内の bulk_update がコミットされる。"""

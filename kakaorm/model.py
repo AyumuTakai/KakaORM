@@ -294,13 +294,16 @@ class Model(metaclass=AsyncORMMeta):
         from functools import reduce
         import operator
 
+        if cls._engine is None:
+            raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
         clauses = [getattr(cls, k) == v for k, v in lookup.items()]
         clause = reduce(operator.and_, clauses) if len(clauses) > 1 else clauses[0]
-        instance = await cls.get_or_none(clause)
-        if instance is not None:
-            return instance, False
-        create_kwargs = {**lookup, **(defaults or {})}
-        return await cls.create(**create_kwargs), True
+        async with cls._engine.transaction():
+            instance = await cls.get_or_none(clause)
+            if instance is not None:
+                return instance, False
+            create_kwargs = {**lookup, **(defaults or {})}
+            return await cls.create(**create_kwargs), True
 
     @classmethod
     async def update_or_create(
@@ -325,16 +328,19 @@ class Model(metaclass=AsyncORMMeta):
         from functools import reduce
         import operator
 
+        if cls._engine is None:
+            raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
         clauses = [getattr(cls, k) == v for k, v in lookup.items()]
         clause = reduce(operator.and_, clauses) if len(clauses) > 1 else clauses[0]
-        instance = await cls.get_or_none(clause)
-        if instance is None:
-            create_kwargs = {**lookup, **(defaults or {})}
-            return await cls.create(**create_kwargs), True
-        for key, value in (defaults or {}).items():
-            setattr(instance, key, value)
-        await instance.save()
-        return instance, False
+        async with cls._engine.transaction():
+            instance = await cls.get_or_none(clause)
+            if instance is None:
+                create_kwargs = {**lookup, **(defaults or {})}
+                return await cls.create(**create_kwargs), True
+            for key, value in (defaults or {}).items():
+                setattr(instance, key, value)
+            await instance.save()
+            return instance, False
 
     @classmethod
     async def truncate(cls, *, restart_identity: bool = True) -> None:
@@ -414,6 +420,8 @@ class Model(metaclass=AsyncORMMeta):
             return []
         if cls._engine is None:
             raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
+        for instance in instances:
+            instance.validate()
         for i in range(0, len(instances), batch_size):
             await cls._engine._bulk_update(instances[i : i + batch_size], fields)
         return instances
