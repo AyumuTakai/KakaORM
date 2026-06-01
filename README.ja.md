@@ -28,19 +28,19 @@ Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `p
 
 ```bash
 # SQLite (開発・テスト向け)
-pip install kakaorm[aiosqlite]
+pip install "kakaorm[aiosqlite]"
 
 # PostgreSQL (asyncpg)
-pip install kakaorm[asyncpg]
+pip install "kakaorm[asyncpg]"
 
 # PostgreSQL (psycopg3)
-pip install kakaorm[psycopg3]
+pip install "kakaorm[psycopg3]"
 
 # MySQL / MariaDB
-pip install kakaorm[aiomysql]
+pip install "kakaorm[aiomysql]"
 
 # 全ドライバ
-pip install kakaorm[all]
+pip install "kakaorm[all]"
 ```
 
 ## クイックスタート

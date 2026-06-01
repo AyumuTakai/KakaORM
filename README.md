@@ -28,19 +28,19 @@ An async-native ORM for Python. Supports PostgreSQL (`asyncpg` / `psycopg3`), SQ
 
 ```bash
 # SQLite (development / testing)
-pip install kakaorm[aiosqlite]
+pip install "kakaorm[aiosqlite]"
 
 # PostgreSQL (asyncpg)
-pip install kakaorm[asyncpg]
+pip install "kakaorm[asyncpg]"
 
 # PostgreSQL (psycopg3)
-pip install kakaorm[psycopg3]
+pip install "kakaorm[psycopg3]"
 
 # MySQL / MariaDB
-pip install kakaorm[aiomysql]
+pip install "kakaorm[aiomysql]"
 
 # All drivers
-pip install kakaorm[all]
+pip install "kakaorm[all]"
 ```
 
 ## Quickstart
