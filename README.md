@@ -22,7 +22,7 @@ Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `p
 - **Eager loading** — `prefetch()` で関連モデルを一括取得。N+1 問題を解消
 - **マイグレーション autogenerate** — `autogenerate()` で差分ファイルを自動生成。`run_files()` + `downgrade()` でファイルベースの管理が可能
 - **CTE（WITH 句）** — `with_cte(name, queryset)` で複雑なクエリを構造化
-- **削除戦略** — `SoftDeleteModel`（論理削除）・`ArchiveModel`（アーカイブ削除）の基底クラスを提供。`delete()` の挙動を継承するだけで切り替えられる
+- **削除戦略** — `SoftDeleteModel`（論理削除）・`ArchiveModel`（アーカイブ削除）の基底クラスを提供。継承するだけで `delete()` の挙動を切り替えられる
 
 ## インストール
 
