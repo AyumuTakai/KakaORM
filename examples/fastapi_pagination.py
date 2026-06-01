@@ -9,7 +9,7 @@ FastAPI + KakaORM 統合ガイド：ページング & フィルタリング
 - PaginationResponse スキーマ
 
 実行:
-    pip install fastapi uvicorn kakaorm[aiosqlite] pydantic
+    pip install fastapi uvicorn "kakaorm[aiosqlite]" pydantic
     python examples/fastapi_pagination.py
     # http://localhost:8000/docs で Swagger UI を確認
 

@@ -10,7 +10,7 @@ FastAPI + KakaORM テスト戦略
 - 関連データ（prefetch）のテスト
 
 実行:
-    pip install fastapi uvicorn kakaorm[aiosqlite] pytest pytest-asyncio httpx
+    pip install fastapi uvicorn "kakaorm[aiosqlite]" pytest pytest-asyncio httpx
     pytest examples/fastapi_testing.py -v
 """
 

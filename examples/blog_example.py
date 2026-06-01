@@ -4,7 +4,7 @@ kakaorm 使用例 — ブログシステム
 実際のアプリケーションでの使い方を示す。
 
 動かし方:
-    pip install aiosqlite
+    pip install "kakaorm[aiosqlite]"
     python examples/blog_example.py
 """
 

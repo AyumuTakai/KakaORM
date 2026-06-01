@@ -4,7 +4,7 @@ kakaorm + FastAPI — TODO リスト API
 シンプルな TODO リスト CRUD API のサンプル。
 
 依存パッケージ:
-    pip install fastapi uvicorn aiosqlite
+    pip install fastapi uvicorn "kakaorm[aiosqlite]"
 
 起動:
     python examples/fastapi_todo.py

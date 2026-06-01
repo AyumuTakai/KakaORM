@@ -10,7 +10,7 @@ FastAPI + KakaORM 統合ガイド：中級パターン
 - エラー処理統一化
 
 実行:
-    pip install fastapi uvicorn kakaorm[aiosqlite] pydantic
+    pip install fastapi uvicorn "kakaorm[aiosqlite]" pydantic
     python examples/fastapi_advanced.py
     # http://localhost:8000/docs で Swagger UI を確認
 """
