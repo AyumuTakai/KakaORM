@@ -124,7 +124,8 @@ class Migrator:
                 plan.statements.append(sql)
                 plan.diffs.append(ColumnDiff(table, "*", "add", new_type="(new table)"))
                 # DOWN: DROP TABLE
-                plan.down_statements.append(f"DROP TABLE IF EXISTS {table}")
+                quoted_table = self.engine.quote_identifier(table)
+                plan.down_statements.append(f"DROP TABLE IF EXISTS {quoted_table}")
             else:
                 # テーブルは存在する → カラム差分を確認
                 db_cols = await self._fetch_columns(table)
@@ -137,11 +138,13 @@ class Migrator:
                     if col_name not in db_cols:
                         nullable_default = "DEFAULT NULL" if col.nullable else ""
                         ddl = col.ddl_fragment()
-                        stmt = f"ALTER TABLE {table} ADD COLUMN {col_name} {ddl} {nullable_default}".strip()
+                        quoted_table = self.engine.quote_identifier(table)
+                        quoted_col = self.engine.quote_identifier(col_name)
+                        stmt = f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_col} {ddl} {nullable_default}".strip()
                         plan.statements.append(stmt)
                         plan.diffs.append(ColumnDiff(table, col_name, "add", new_type=ddl))
                         # DOWN: ADD の逆は DROP
-                        plan.down_statements.append(f"ALTER TABLE {table} DROP COLUMN {col_name}")
+                        plan.down_statements.append(f"ALTER TABLE {quoted_table} DROP COLUMN {quoted_col}")
 
                 # 削除されたカラム (安全のためデフォルトは警告コメントのみ)
                 for col_name in db_cols:
@@ -153,8 +156,10 @@ class Migrator:
                             f"Run plan_with_drop() to drop."
                         )
                         # DOWN: DROP の逆は ADD（old_type を使って元に戻す）
+                        quoted_table = self.engine.quote_identifier(table)
+                        quoted_col = self.engine.quote_identifier(col_name)
                         plan.down_statements.append(
-                            f"ALTER TABLE {table} ADD COLUMN {col_name} {old_type}"
+                            f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_col} {old_type}"
                         )
 
         return plan
@@ -288,23 +293,25 @@ class Migrator:
     def _build_create_table(self, model_cls: Any) -> str:
         meta = model_cls._meta
         col_defs = [
-            f"  {col_name} {self.engine._adapt_ddl(col.ddl_fragment())}"
+            f"  {self.engine.quote_identifier(col_name)} {self.engine._adapt_ddl(col.ddl_fragment())}"
             for col_name, col in meta.columns.items()
         ]
         col_defs = self.engine._post_process_col_defs(col_defs)
+        quoted_table = self.engine.quote_identifier(meta.table_name)
         return (
-            f"CREATE TABLE IF NOT EXISTS {meta.table_name} (\n"
+            f"CREATE TABLE IF NOT EXISTS {quoted_table} (\n"
             + ",\n".join(col_defs)
             + f"\n){self.engine._table_suffix}"
         )
 
-    @staticmethod
-    def _warning_to_drop(warning_comment: str) -> str:
+    def _warning_to_drop(self, warning_comment: str) -> str:
         import re
         m = re.search(r"column (\w+)\.(\w+) exists", warning_comment)
         if m:
             table, col = m.group(1), m.group(2)
-            return f"ALTER TABLE {table} DROP COLUMN {col}"
+            quoted_table = self.engine.quote_identifier(table)
+            quoted_col = self.engine.quote_identifier(col)
+            return f"ALTER TABLE {quoted_table} DROP COLUMN {quoted_col}"
         return warning_comment
 
 
@@ -345,11 +352,13 @@ class VersionedMigrator(Migrator):
 
     async def ensure_history_table(self) -> None:
         """履歴テーブルが存在しなければ作成する。既存テーブルに down_sql カラムを追加する。"""
+        quoted_table = self.engine.quote_identifier(self.HISTORY_TABLE)
+        quoted_col = self.engine.quote_identifier("down_sql")
         sql = (
-            f"CREATE TABLE IF NOT EXISTS {self.HISTORY_TABLE} ("
+            f"CREATE TABLE IF NOT EXISTS {quoted_table} ("
             f"  name TEXT PRIMARY KEY,"
             f"  applied_at TEXT NOT NULL,"
-            f"  down_sql TEXT NOT NULL DEFAULT ''"
+            f"  {quoted_col} TEXT NOT NULL DEFAULT ''"
             f")"
         )
         await self.engine._execute(sql, [])
@@ -359,7 +368,7 @@ class VersionedMigrator(Migrator):
         if "down_sql" not in existing_cols:
             try:
                 await self.engine._execute(
-                    f"ALTER TABLE {self.HISTORY_TABLE} ADD COLUMN down_sql TEXT NOT NULL DEFAULT ''",
+                    f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_col} TEXT NOT NULL DEFAULT ''",
                     [],
                 )
             except Exception:
@@ -367,23 +376,32 @@ class VersionedMigrator(Migrator):
 
     async def applied_names(self) -> set[str]:
         """適用済みマイグレーション名のセット。"""
+        quoted_table = self.engine.quote_identifier(self.HISTORY_TABLE)
         rows = await self.engine._fetch(
-            f"SELECT name FROM {self.HISTORY_TABLE}", []
+            f"SELECT name FROM {quoted_table}", []
         )
         return {r["name"] for r in rows}
 
     async def record(self, name: str, down_sql: str = "") -> None:
         """マイグレーション名と DOWN SQL を履歴テーブルに記録する。"""
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        quoted_table = self.engine.quote_identifier(self.HISTORY_TABLE)
+        quoted_name = self.engine.quote_identifier("name")
+        quoted_applied_at = self.engine.quote_identifier("applied_at")
+        quoted_down_sql = self.engine.quote_identifier("down_sql")
         await self.engine._execute(
-            f"INSERT INTO {self.HISTORY_TABLE} (name, applied_at, down_sql) VALUES (%s, %s, %s)",
+            f"INSERT INTO {quoted_table} ({quoted_name}, {quoted_applied_at}, {quoted_down_sql}) VALUES (%s, %s, %s)",
             [name, now, down_sql],
         )
 
     async def history(self) -> list[MigrationRecord]:
         """適用済みマイグレーションを適用順に返す。"""
+        quoted_table = self.engine.quote_identifier(self.HISTORY_TABLE)
+        quoted_name = self.engine.quote_identifier("name")
+        quoted_applied_at = self.engine.quote_identifier("applied_at")
+        quoted_down_sql = self.engine.quote_identifier("down_sql")
         rows = await self.engine._fetch(
-            f"SELECT name, applied_at, down_sql FROM {self.HISTORY_TABLE} ORDER BY applied_at ASC",
+            f"SELECT {quoted_name}, {quoted_applied_at}, {quoted_down_sql} FROM {quoted_table} ORDER BY {quoted_applied_at} ASC",
             [],
         )
         return [

@@ -85,6 +85,16 @@ class Engine(ABC):
 
     # ── DB 方言別 DDL 変換 ────────────────────────────────────
 
+    @abstractmethod
+    def quote_identifier(self, name: str) -> str:
+        """
+        テーブル名やカラム名をDB方言に応じてクォートする。
+
+        - PostgreSQL: "name"
+        - SQLite: [name]
+        - MySQL: `name`
+        """
+
     def _adapt_ddl(self, ddl: str) -> str:
         """カラム DDL を DB 方言に合わせて変換する。デフォルトはそのまま返す。"""
         return ddl
@@ -227,12 +237,13 @@ class Engine(ABC):
         meta = model_cls._meta
         exists = "IF NOT EXISTS " if if_not_exists else ""
         col_defs = [
-            f"  {col_name} {self._adapt_ddl(col.ddl_fragment())}"
+            f"  {self.quote_identifier(col_name)} {self._adapt_ddl(col.ddl_fragment())}"
             for col_name, col in meta.columns.items()
         ]
         col_defs = self._post_process_col_defs(col_defs)
+        quoted_table = self.quote_identifier(meta.table_name)
         sql = (
-            f"CREATE TABLE {exists}{meta.table_name} (\n"
+            f"CREATE TABLE {exists}{quoted_table} (\n"
             + ",\n".join(col_defs)
             + f"\n){self._table_suffix}"
         )
@@ -244,8 +255,10 @@ class Engine(ABC):
         exists = "IF NOT EXISTS " if if_not_exists else ""
         for idx_cols in meta.indexes:
             idx_name = f"idx_{meta.table_name}_{'_'.join(idx_cols)}"
-            cols_sql = ", ".join(idx_cols)
-            sql = f"CREATE INDEX {exists}{idx_name} ON {meta.table_name} ({cols_sql})"
+            # カラム名をクォート
+            quoted_cols = ", ".join(self.quote_identifier(col) for col in idx_cols)
+            quoted_table = self.quote_identifier(meta.table_name)
+            sql = f"CREATE INDEX {exists}{idx_name} ON {quoted_table} ({quoted_cols})"
             await self._execute(sql, [])
 
     async def drop_table(
@@ -263,7 +276,8 @@ class Engine(ABC):
         meta = model_cls._meta
         exists = "IF EXISTS " if if_exists else ""
         cascade_sql = " CASCADE" if cascade else ""
-        sql = f"DROP TABLE {exists}{meta.table_name}{cascade_sql}"
+        quoted_table = self.quote_identifier(meta.table_name)
+        sql = f"DROP TABLE {exists}{quoted_table}{cascade_sql}"
         await self._execute(sql, [])
 
     async def truncate(self, model_cls: Any, *, restart_identity: bool = True) -> None:
@@ -309,6 +323,10 @@ class AsyncpgEngine(Engine):
 
     def _param(self, n: int) -> str:
         return f"${n}"
+
+    def quote_identifier(self, name: str) -> str:
+        """PostgreSQL: ダブルクォートでテーブル名・カラム名を囲む"""
+        return f'"{name}"'
 
     async def connect(self) -> None:
         import asyncpg  # type: ignore
@@ -427,6 +445,10 @@ class AioSQLiteEngine(Engine):
 
     def _placeholders(self, n: int) -> str:
         return ", ".join("?" for _ in range(n))
+
+    def quote_identifier(self, name: str) -> str:
+        """SQLite: 角括弧でテーブル名・カラム名を囲む"""
+        return f"[{name}]"
 
     def _adapt_ddl(self, ddl: str) -> str:
         ddl = ddl.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
@@ -586,6 +608,14 @@ class AioMySQLEngine(Engine):
         self._maxsize = maxsize
         self._pool: Any = None
 
+    def _param(self, n: int) -> str:
+        """MySQLは%sプレースホルダーを使用"""
+        return "%s"
+
+    def quote_identifier(self, name: str) -> str:
+        """MySQL: バッククォートでテーブル名・カラム名を囲む"""
+        return f"`{name}`"
+
     def _adapt_ddl(self, ddl: str) -> str:
         ddl = ddl.replace("SERIAL PRIMARY KEY", "INT AUTO_INCREMENT PRIMARY KEY")
         ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "DATETIME")
@@ -690,6 +720,14 @@ class Psycopg3Engine(Engine):
         self._min_size = min_size
         self._max_size = max_size
         self._pool: Any = None
+
+    def _param(self, n: int) -> str:
+        """psycopg3は$nプレースホルダーを使用"""
+        return f"${n}"
+
+    def quote_identifier(self, name: str) -> str:
+        """PostgreSQL: ダブルクォートでテーブル名・カラム名を囲む"""
+        return f'"{name}"'
 
     async def connect(self) -> None:
         import psycopg_pool  # type: ignore

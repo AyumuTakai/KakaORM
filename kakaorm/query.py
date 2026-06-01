@@ -287,6 +287,9 @@ class QuerySet(Generic[T]):
     def _build_sql(self) -> tuple[str, list[Any]]:
         """SELECT 文と bind パラメータのタプルを返す。"""
         table = self._model._meta.table_name
+        # テーブル名をDB方言に応じてクォート
+        if self._model._engine:
+            table = self._model._engine.quote_identifier(table)
 
         # CTE（WITH 句）: パラメータは主クエリより前に積む
         cte_parts: list[str] = []
@@ -314,6 +317,9 @@ class QuerySet(Generic[T]):
         # JOIN 句
         for j in self._joins:
             join_table = j.model._meta.table_name
+            # テーブル名をDB方言に応じてクォート
+            if j.model._engine:
+                join_table = j.model._engine.quote_identifier(join_table)
             sql += f" {j.join_type} JOIN {join_table} ON {j.on_sql}"
 
         # WHERE / GROUP BY / HAVING / ORDER BY / LIMIT / OFFSET
@@ -454,6 +460,9 @@ class QuerySet(Generic[T]):
     async def count(self) -> int:
         """COUNT(*) を実行して件数を返す。"""
         table = self._model._meta.table_name
+        # テーブル名をDB方言に応じてクォート
+        if self._model._engine:
+            table = self._model._engine.quote_identifier(table)
         where_sql, params = self._merge_clauses(self._where, "WHERE")
         sql = f"SELECT COUNT(*) AS cnt FROM {table}{where_sql}"
         rows = await self._engine._fetch(sql, params)
@@ -470,6 +479,9 @@ class QuerySet(Generic[T]):
             )
         """
         table = self._model._meta.table_name
+        # テーブル名をDB方言に応じてクォート
+        if self._model._engine:
+            table = self._model._engine.quote_identifier(table)
         select_parts = [
             f"{agg._having_expr()} AS {alias}"
             for alias, agg in agg_exprs.items()
@@ -517,6 +529,9 @@ class QuerySet(Generic[T]):
     async def delete(self) -> int:
         """条件に一致するレコードを一括 DELETE し削除件数を返す。"""
         table = self._model._meta.table_name
+        # テーブル名をDB方言に応じてクォート
+        if self._model._engine:
+            table = self._model._engine.quote_identifier(table)
         where_sql, params = self._merge_clauses(self._where, "WHERE")
         sql = f"DELETE FROM {table}{where_sql}"
         return await self._engine._execute(sql, params)
@@ -540,6 +555,9 @@ class QuerySet(Generic[T]):
                 f"Unknown column(s) for {self._model.__name__}: {unknown!r}"
             )
         table = self._model._meta.table_name
+        # テーブル名をDB方言に応じてクォート
+        if self._model._engine:
+            table = self._model._engine.quote_identifier(table)
         set_parts: list[str] = []
         params: list[Any] = []
         for k, v in values.items():
@@ -591,6 +609,11 @@ class QuerySet(Generic[T]):
 
         dest_table = dest_model._meta.table_name
         src_table = self._model._meta.table_name
+        # テーブル名をDB方言に応じてクォート
+        if dest_model._engine:
+            dest_table = dest_model._engine.quote_identifier(dest_table)
+        if self._model._engine:
+            src_table = self._model._engine.quote_identifier(src_table)
 
         dest_cols: list[str] = []
         select_exprs: list[str] = []
