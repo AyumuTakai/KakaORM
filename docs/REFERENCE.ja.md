@@ -851,3 +851,24 @@ kakaorm はクエリの値を常にバインドパラメータとして扱い、
 >
 > また、`create()` / `save()` は既知フィールドへの書き込みを制限しません。
 > ユーザー入力から特権フィールド（`is_admin` など）を除外する処理はアプリ層で行ってください。
+
+## テーブル名と予約語
+
+KakaORM は各データベース固有の方法で識別子を自動クォートするため、SQL の予約語（`order`、`select`、`group` など）をテーブル名として特別な記述なしに使用できます。
+
+```python
+class Order(Model):
+    class Meta:
+        table_name = "order"  # KakaORM が自動的にクォート
+```
+
+> **手動でクォートしないでください。** クォート文字を自分で付けると二重クォートが発生します：
+>
+> ```python
+> class Meta:
+>     table_name = "[order]"   # ❌ SQLite で [[order]] になる
+>     table_name = '"order"'   # ❌ 手動クォートは不要
+>     table_name = '`order`'   # ❌ 手動クォートは不要
+> ```
+>
+> 可能であれば予約語を避けた命名を推奨します（例: `order` の代わりに `orders`）。

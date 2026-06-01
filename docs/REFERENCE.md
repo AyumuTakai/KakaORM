@@ -851,3 +851,24 @@ KakaORM always treats query values as bind parameters to prevent SQL injection.
 >
 > Also note that `create()` / `save()` do not restrict writes to privileged fields (e.g. `is_admin`).
 > Exclude such fields from user input at the application layer.
+
+## Table Naming — Reserved Words
+
+KakaORM automatically quotes identifiers for each database, so SQL reserved words (`order`, `select`, `group`, etc.) can be used as table names without any special handling.
+
+```python
+class Order(Model):
+    class Meta:
+        table_name = "order"  # KakaORM quotes this automatically
+```
+
+> **Do not quote manually.** Adding quote characters yourself causes double-quoting:
+>
+> ```python
+> class Meta:
+>     table_name = "[order]"   # ❌ becomes [[order]] on SQLite
+>     table_name = '"order"'   # ❌ manual quoting is unnecessary
+>     table_name = '`order`'   # ❌ manual quoting is unnecessary
+> ```
+>
+> Where possible, prefer names that avoid reserved words (e.g. `orders` instead of `order`).
