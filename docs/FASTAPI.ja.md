@@ -1,6 +1,6 @@
-# KakaORM — FastAPI Integration Guide
+# KakaORM — FastAPI 統合ガイド
 
-[日本語](https://github.com/AyumuTakai/KakaORM/blob/main/docs/FASTAPI.ja.md) | [← README](https://github.com/AyumuTakai/KakaORM/blob/main/README.md)
+[English](https://github.com/AyumuTakai/KakaORM/blob/main/docs/FASTAPI.md) | [← README](https://github.com/AyumuTakai/KakaORM/blob/main/README.ja.md)
 
 KakaORM は FastAPI との統合を最初から想定して設計されています。このガイドでは、セットアップからテスト、本番運用までの実装パターンを段階別に解説します。
 
@@ -57,7 +57,7 @@ from kakaorm import Model, StrColumn, BoolColumn, IntColumn, ForeignKey
 class User(Model):
     name  = StrColumn(nullable=False)
     email = StrColumn(unique=True, nullable=False)
-    
+
     class Meta:
         table_name = "user"
 
@@ -66,7 +66,7 @@ class Post(Model):
     content  = StrColumn(nullable=True)
     published = BoolColumn(default=False)
     user_id  = ForeignKey(User, nullable=False)
-    
+
     class Meta:
         table_name = "post"
 ```
@@ -88,11 +88,11 @@ async def lifespan(app: FastAPI):
     plan = await Migrator(engine).plan([User, Post])
     if not plan.is_empty():
         await plan.apply()
-    
+
     app.state.engine = engine
-    
+
     yield
-    
+
     # Shutdown: Engine 終了
     await engine.disconnect()
 
@@ -177,7 +177,7 @@ async def update_user(user_id: int, body: UserUpdate):
     user = await User.get_or_none(User.id == user_id)
     if user is None:
         raise HTTPException(status_code=404)
-    
+
     # 与えられたフィールドのみ更新
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(user, field, value)
@@ -205,7 +205,7 @@ async def delete_user(user_id: int):
 KakaORM モデルは Pydantic v2 プロトコルを実装しているため、`response_model` に直接指定可能です：
 
 ```python
-@app.get("/users", response_model=list[User])  # ✅ KakaORM モデル直接指定
+@app.get("/users", response_model=list[User])  # KakaORM モデル直接指定
 async def list_users():
     return await User.all()
 ```
@@ -252,20 +252,20 @@ from kakaorm import belongs_to, has_many
 
 class User(Model):
     name = StrColumn(nullable=False)
-    
+
     # 逆参照：ユーザーの投稿一覧
-    posts = has_many(Post, foreign_key="user_id")
-    
+    posts = has_many("Post", foreign_key="user_id")
+
     class Meta:
         table_name = "user"
 
 class Post(Model):
     title = StrColumn(nullable=False)
     user_id = ForeignKey(User, nullable=False)
-    
+
     # 順参照：投稿の著者
     author = belongs_to(User, foreign_key="user_id")
-    
+
     class Meta:
         table_name = "post"
 ```
@@ -276,11 +276,11 @@ class Post(Model):
 @app.get("/users-with-posts", response_model=list[User])
 async def list_users_with_posts():
     users = await User.all()  # SQL: 1 query
-    
+
     # ⚠️ この for ループは各ユーザーに対して追加クエリを実行
     for user in users:
         posts = await user.posts  # SQL: N queries (N = user count)
-    
+
     return users
     # 合計: N+1 queries（非常に非効率）
 ```
@@ -293,14 +293,15 @@ async def list_users_with_posts():
     # prefetch で関連データを一括取得
     users = await User.all().prefetch("posts")
     # SQL: 2 queries (users + posts)
-    
+
     for user in users:
         posts = await user.posts  # キャッシュから取得（追加クエリなし）
-    
+
     return users
 ```
 
 **パフォーマンス比較：**
+
 | ケース | ユーザー数 | SQL クエリ数 |
 |--------|-----------|------------|
 | prefetch なし | 10 | 11 (1 + 10) |
@@ -311,10 +312,10 @@ async def list_users_with_posts():
 ### 複数リレーションのプリフェッチ
 
 ```python
-# User → posts → comments という 3 階層のリレーション
+# 複数リレーションを一括プリフェッチ
 users = await (
     User.all()
-    .prefetch("posts", "comments")  # 複数リレーション
+    .prefetch("posts", "comments")
 )
 
 for user in users:
@@ -337,17 +338,16 @@ async def list_posts(
     limit: int = Query(10, ge=1, le=100),
 ):
     skip = (page - 1) * limit
-    
-    total = await Post.count()
+
+    total = await Post.all().count()
     posts = await (
         Post.all()
         .offset(skip)
         .limit(limit)
-        .execute()
     )
-    
+
     return {
-        "items": posts,
+        "items": [p.model_dump() for p in posts],
         "total": total,
         "page": page,
         "pages": (total + limit - 1) // limit,
@@ -369,17 +369,17 @@ async def search_posts(
     user_id: int | None = None,
 ):
     query = Post.all()
-    
+
     if title:
-        query = query.where(Post.title.icontains(title))  # LIKE 検索
-    
+        query = query.where(Post.title.ilike(f"%{title}%"))  # LIKE 検索
+
     if published is not None:
         query = query.where(Post.published == published)
-    
+
     if user_id:
         query = query.where(Post.user_id == user_id)
-    
-    return await query.execute()
+
+    return [p.model_dump() for p in await query]
 ```
 
 **実行:**
@@ -390,21 +390,23 @@ curl "http://localhost:8000/posts/search?title=python&published=true"
 ### ソート（複数列）
 
 ```python
+ALLOWED_SORT_FIELDS = {"id", "title", "created_at"}
+
 @app.get("/posts/sorted")
 async def sorted_posts(
     sort: str = Query("id"),  # "id,-created_at,title"
 ):
     query = Post.all()
-    
+
     for field in sort.split(","):
-        if field.startswith("-"):
-            col = getattr(Post, field[1:])
-            query = query.order_by(col.desc)
-        else:
-            col = getattr(Post, field)
-            query = query.order_by(col.asc)
-    
-    return await query.execute()
+        desc = field.startswith("-")
+        col_name = field.lstrip("-")
+        if col_name not in ALLOWED_SORT_FIELDS:
+            continue
+        col = getattr(Post, col_name)
+        query = query.order_by(col.desc if desc else col.asc)
+
+    return [p.model_dump() for p in await query]
 ```
 
 **実行:**
@@ -423,14 +425,10 @@ from fastapi import HTTPException
 
 @app.get("/users/{user_id}")
 async def get_user(user_id: int):
-    try:
-        user = await User.get(User.id == user_id)
-        return user
-    except User.NotFound:
+    user = await User.get_or_none(User.id == user_id)
+    if user is None:
         raise HTTPException(status_code=404, detail="User not found")
-    except User.MultipleResults:
-        # データベース整合性エラー
-        raise HTTPException(status_code=500, detail="Database error")
+    return user
 ```
 
 ### Pydantic バリデーションエラー
@@ -444,17 +442,9 @@ class UserCreate(BaseModel):
 
 @app.post("/users", response_model=User)
 async def create_user(body: UserCreate):
-    # body.email が無効形式の場合、自動的に 422 を返す
+    # body のバリデーション失敗時は自動的に 422 を返す
     user = await User.create(**body.model_dump())
     return user
-```
-
-**実行（エラー）:**
-```bash
-curl -X POST http://localhost:8000/users \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Alice", "email": "invalid-email"}'
-# 422 Unprocessable Entity
 ```
 
 ### カスタムエラーハンドラー
@@ -462,11 +452,11 @@ curl -X POST http://localhost:8000/users \
 ```python
 from fastapi.responses import JSONResponse
 
-@app.exception_handler(User.NotFound)
-async def user_not_found_handler(request, exc):
+@app.exception_handler(Exception)
+async def generic_exception_handler(request, exc):
     return JSONResponse(
-        status_code=404,
-        content={"detail": "User not found", "error_code": "USER_NOT_FOUND"},
+        status_code=500,
+        content={"detail": "Internal server error"},
     )
 ```
 
@@ -483,7 +473,7 @@ async def create_user_with_post(
     post_data: dict,
 ):
     engine = app.state.engine
-    
+
     async with engine.transaction():
         # トランザクション内でのすべての操作
         user = await User.create(**user_data.model_dump())
@@ -491,7 +481,7 @@ async def create_user_with_post(
             user_id=user.id,
             **post_data
         )
-        
+
         return {
             "user": user.model_dump(),
             "post": post.model_dump(),
@@ -510,21 +500,24 @@ async def transfer_credits(
     amount: int,
 ):
     engine = app.state.engine
-    
+
     try:
         async with engine.transaction():
-            from_user = await User.get(User.id == from_user_id)
-            to_user = await User.get(User.id == to_user_id)
-            
+            from_user = await User.get_or_none(User.id == from_user_id)
+            to_user = await User.get_or_none(User.id == to_user_id)
+
+            if from_user is None or to_user is None:
+                raise HTTPException(status_code=404, detail="User not found")
+
             if from_user.credits < amount:
                 raise ValueError("Insufficient credits")
-            
+
             from_user.credits -= amount
             to_user.credits += amount
-            
+
             await from_user.save()
             await to_user.save()
-            
+
             return {"status": "ok"}
     except ValueError as e:
         # トランザクション自動 ROLLBACK
@@ -537,31 +530,32 @@ async def transfer_credits(
 
 ### 最小構成テスト（pytest + httpx）
 
+```bash
+pip install pytest pytest-asyncio httpx "kakaorm[aiosqlite]"
+```
+
 ```python
 # tests/conftest.py
 import pytest
-from sqlalchemy import create_engine
+import asyncio
 import kakaorm
 from fastapi.testclient import TestClient
 from main import app
 from models import User, Post
 
-@pytest.fixture
-async def test_engine():
-    """In-memory SQLite for testing"""
-    engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
-    from kakaorm.migration import Migrator
-    plan = await Migrator(engine).plan([User, Post])
-    if not plan.is_empty():
-        await plan.apply()
-    
-    yield engine
-    
-    await engine.disconnect()
+@pytest.fixture(scope="session")
+def test_engine():
+    async def _setup():
+        engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
+        from kakaorm.migration import Migrator
+        plan = await Migrator(engine).plan([User, Post])
+        if not plan.is_empty():
+            await plan.apply()
+        return engine
+    return asyncio.run(_setup())
 
 @pytest.fixture
 def client(test_engine):
-    """FastAPI TestClient"""
     app.state.engine = test_engine
     return TestClient(app)
 ```
@@ -590,14 +584,14 @@ def test_get_user_404(client):
     assert response.status_code == 404
 
 def test_update_user(client):
-    # Setup
+    # セットアップ
     create_response = client.post(
         "/users",
         json={"name": "Alice", "email": "alice@example.com"}
     )
     user_id = create_response.json()["id"]
-    
-    # Update
+
+    # 更新
     response = client.patch(
         f"/users/{user_id}",
         json={"name": "Alice Updated"}
@@ -606,48 +600,20 @@ def test_update_user(client):
     assert response.json()["name"] == "Alice Updated"
 
 def test_delete_user(client):
-    # Setup
+    # セットアップ
     create_response = client.post(
         "/users",
         json={"name": "Alice", "email": "alice@example.com"}
     )
     user_id = create_response.json()["id"]
-    
-    # Delete
+
+    # 削除
     response = client.delete(f"/users/{user_id}")
     assert response.status_code == 204
-    
-    # Verify deleted
+
+    # 削除確認
     get_response = client.get(f"/users/{user_id}")
     assert get_response.status_code == 404
-```
-
-### リレーション + Prefetch のテスト
-
-```python
-def test_list_users_with_posts_prefetch(client):
-    # Setup: User + Post を作成
-    user_response = client.post(
-        "/users",
-        json={"name": "Alice", "email": "alice@example.com"}
-    )
-    user_id = user_response.json()["id"]
-    
-    post_response = client.post(
-        "/posts",
-        json={
-            "title": "Test Post",
-            "user_id": user_id
-        }
-    )
-    
-    # Test: prefetch で関連データ取得
-    response = client.get("/users-with-posts")
-    assert response.status_code == 200
-    users = response.json()
-    
-    assert len(users) == 1
-    assert users[0]["posts"] is not None  # prefetch されている
 ```
 
 ---
@@ -658,11 +624,10 @@ def test_list_users_with_posts_prefetch(client):
 
 ```python
 import logging
-from fastapi.middleware import Middleware
 from fastapi.middleware.base import BaseHTTPMiddleware
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("kakaorm")
+logger = logging.getLogger(__name__)
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
@@ -676,17 +641,13 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         )
         return response
 
-app = FastAPI(
-    middleware=[Middleware(LoggingMiddleware)],
-    lifespan=lifespan,
-)
+app = FastAPI(lifespan=lifespan)
+app.add_middleware(LoggingMiddleware)
 ```
 
 ### 接続プーリング（PostgreSQL）
 
 ```python
-import asyncpg
-
 async def lifespan(app: FastAPI):
     # 接続プーリング設定
     engine = await kakaorm.connect(
@@ -694,11 +655,11 @@ async def lifespan(app: FastAPI):
         min_size=5,    # 最小接続数
         max_size=20,   # 最大接続数
     )
-    
+
     app.state.engine = engine
-    
+
     yield
-    
+
     await engine.disconnect()
 ```
 
@@ -706,14 +667,14 @@ async def lifespan(app: FastAPI):
 
 ```bash
 # 開発環境でマイグレーション生成
-kakaorm makemigrations models.py --name add_user_bio
+kakaorm makemigrations --models myapp.models --db sqlite+aiosqlite:///./dev.db --name add_user_bio
 
 # マイグレーションファイルをバージョン管理
 git add migrations/
 git commit -m "Add user bio migration"
 
 # 本番環境でマイグレーション適用
-kakaorm migrate --db postgresql+asyncpg://prod-server/db
+kakaorm migrate --db postgresql+asyncpg://prod-server/dbname
 ```
 
 ---
@@ -722,9 +683,9 @@ kakaorm migrate --db postgresql+asyncpg://prod-server/db
 
 ### Q1: Pydantic モデルと KakaORM モデルの使い分けは？
 
-**A:** 
-- **リクエスト:** Pydantic BaseModel（入力バリデーション）
-- **レスポンス:** KakaORM Model（自動シリアライズ）
+**A:**
+- **リクエスト:** Pydantic `BaseModel`（入力バリデーション）
+- **レスポンス:** KakaORM `Model`（自動シリアライズ）
 
 ```python
 # リクエスト
@@ -745,9 +706,6 @@ async def create_user(body: UserCreate):  # Pydantic BaseModel
 
 ```python
 import logging
-logging.getLogger("sqlalchemy").setLevel(logging.DEBUG)
-
-# または kakaorm のログレベル調整
 logging.getLogger("kakaorm").setLevel(logging.DEBUG)
 ```
 
@@ -763,17 +721,11 @@ async with engine.transaction():
 
 ### Q4: 複数エンジン（複数 DB）を使いたい場合は？
 
-**A:** 各 engine を app.state に保存：
+**A:** 各 engine を `app.state` に保存：
 
 ```python
-app.state.engine_primary = await kakaorm.connect("postgresql://...")
-app.state.engine_secondary = await kakaorm.connect("postgresql://...")
-
-@app.get("/data")
-async def get_data():
-    # primary DB から取得
-    data = await Model.all()  # engine_primary を使用
-    return data
+app.state.engine_primary   = await kakaorm.connect("postgresql://primary/db")
+app.state.engine_secondary = await kakaorm.connect("postgresql://secondary/db")
 ```
 
 ---
@@ -782,14 +734,15 @@ async def get_data():
 
 完全な実装例は `examples/` ディレクトリを参照してください：
 
-- `fastapi_advanced.py` — 依存性注入、複数モデル、エラー処理
-- `fastapi_pagination.py` — ページング & フィルタリング
-- `fastapi_testing.py` — テスト戦略
+- `examples/fastapi_todo.py` — 基本的な TODO API
+- `examples/fastapi_advanced.py` — 依存性注入、複数モデル、エラー処理
+- `examples/fastapi_pagination.py` — ページング & フィルタリング
+- `examples/fastapi_testing.py` — テスト戦略
 
 ```bash
-# 実行
-python examples/fastapi_advanced.py
-# http://localhost:8000/docs
+pip install fastapi uvicorn aiosqlite
+python examples/fastapi_todo.py
+# http://localhost:8000/docs で Swagger UI を確認
 ```
 
 ---
@@ -798,4 +751,5 @@ python examples/fastapi_advanced.py
 
 - [FastAPI 公式ドキュメント](https://fastapi.tiangolo.com)
 - [Pydantic v2](https://docs.pydantic.dev)
-- [KakaORM README](../README.md)
+- [KakaORM README](https://github.com/AyumuTakai/KakaORM/blob/main/README.ja.md)
+- [API リファレンス](https://github.com/AyumuTakai/KakaORM/blob/main/docs/REFERENCE.ja.md)
