@@ -37,6 +37,14 @@ class AggFunc:
         new._alias = alias
         return new
 
+    def over(
+        self,
+        partition_by: list[Any] | None = None,
+        order_by: list[Any] | None = None,
+    ) -> "WindowedAgg":
+        """集計関数をウィンドウ関数に変換する。"""
+        return WindowedAgg(self._func, self._col_expr, partition_by, order_by)
+
     def _sql_expr(self) -> str:
         """SELECT リスト用の SQL 式（エイリアス付き）。"""
         base = f"{self._func}({self._col_expr})"
@@ -107,6 +115,177 @@ class Max(AggFunc):
 class Min(AggFunc):
     def __init__(self, col: Any) -> None:
         super().__init__("MIN", _col_expr(col))
+
+
+# ── ウィンドウ関数 ──────────────────────────────────────────
+# OVER (PARTITION BY ... ORDER BY ...) 句を生成
+
+class WindowFunc:
+    """
+    ウィンドウ関数ベースクラス。
+    ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD 等で継承される。
+    """
+
+    def __init__(self, col_expr: str | None = None) -> None:
+        # サブクラスで property が定義されている場合（LAG, LEAD, WindowedAgg）は
+        # ここでは _func を設定しない
+        if not hasattr(type(self), "_func") or not isinstance(getattr(type(self), "_func"), property):
+            self._func: str = ""  # ROW_NUMBER(), RANK(), LAG(...) 等
+        self._col_expr: str | None = col_expr
+        self._partition_by: list[str] = []
+        self._order_by: list[str] = []
+        self._alias: str | None = None
+
+    def over(
+        self,
+        partition_by: list[Any] | None = None,
+        order_by: list[Any] | None = None,
+    ) -> "WindowFunc":
+        """
+        OVER (PARTITION BY ... ORDER BY ...) を定義する。
+        イミュータブル設計（新規インスタンスを返す）。
+        """
+        new = self._clone()
+
+        if partition_by:
+            new._partition_by = [
+                col._qualified() if hasattr(col, "_qualified") else str(col)
+                for col in partition_by
+            ]
+
+        if order_by:
+            new._order_by = []
+            for col in order_by:
+                if hasattr(col, "_qualified"):
+                    # asc / desc プロパティを確認
+                    if hasattr(col, "_desc") and col._desc:
+                        new._order_by.append(f"{col._qualified()} DESC")
+                    else:
+                        new._order_by.append(f"{col._qualified()} ASC")
+                else:
+                    new._order_by.append(str(col))
+
+        return new
+
+    def label(self, alias: str) -> "WindowFunc":
+        """カラム別名を設定する（イミュータブル）。"""
+        new = self._clone()
+        new._alias = alias
+        return new
+
+    def _clone(self) -> "WindowFunc":
+        """インスタンスのクローン（イミュータブル設計）。"""
+        new = self.__class__.__new__(self.__class__)
+        new.__dict__.update(self.__dict__)
+        new._partition_by = list(self._partition_by)
+        new._order_by = list(self._order_by)
+        return new
+
+    def _sql_expr(self) -> str:
+        """SELECT リスト用の SQL 式（OVER 句を含む）。"""
+        window_parts = []
+        if self._partition_by:
+            window_parts.append(f"PARTITION BY {', '.join(self._partition_by)}")
+        if self._order_by:
+            window_parts.append(f"ORDER BY {', '.join(self._order_by)}")
+
+        over_clause = f" OVER ({' '.join(window_parts)})" if window_parts else " OVER ()"
+        base = f"{self._func}{over_clause}"
+
+        return f"{base} AS {self._alias}" if self._alias else base
+
+
+class RowNumber(WindowFunc):
+    """ROW_NUMBER() OVER (...)"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._func = "ROW_NUMBER()"
+
+
+class Rank(WindowFunc):
+    """RANK() OVER (...)"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._func = "RANK()"
+
+
+class DenseRank(WindowFunc):
+    """DENSE_RANK() OVER (...)"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._func = "DENSE_RANK()"
+
+
+class Lag(WindowFunc):
+    """LAG(col, offset, default) OVER (...)"""
+
+    def __init__(self, col: Any, offset: int = 1, default: Any = None) -> None:
+        col_expr = _col_expr(col)
+        super().__init__(col_expr)
+        self._offset = offset
+        self._default = default
+        self._col_expr = col_expr
+
+    @property
+    def _func(self) -> str:
+        """動的生成（offset, default を含む）。"""
+        args = [self._col_expr, str(self._offset)]
+        if self._default is not None:
+            args.append(f"'{self._default}'")
+        return f"LAG({', '.join(args)})"
+
+
+class Lead(WindowFunc):
+    """LEAD(col, offset, default) OVER (...)"""
+
+    def __init__(self, col: Any, offset: int = 1, default: Any = None) -> None:
+        col_expr = _col_expr(col)
+        super().__init__(col_expr)
+        self._offset = offset
+        self._default = default
+        self._col_expr = col_expr
+
+    @property
+    def _func(self) -> str:
+        """動的生成（offset, default を含む）。"""
+        args = [self._col_expr, str(self._offset)]
+        if self._default is not None:
+            args.append(f"'{self._default}'")
+        return f"LEAD({', '.join(args)})"
+
+
+class WindowedAgg(WindowFunc):
+    """集計関数のウィンドウ版（SUM/AVG/MIN/MAX OVER ...）。"""
+
+    def __init__(
+        self,
+        func_name: str,
+        col_expr: str,
+        partition_by: list[Any] | None = None,
+        order_by: list[Any] | None = None,
+    ) -> None:
+        super().__init__(col_expr)
+        self._func_name = func_name  # SUM, AVG, MIN, MAX
+        self._col_expr = col_expr
+        if partition_by:
+            self._partition_by = [
+                col._qualified() if hasattr(col, "_qualified") else str(col)
+                for col in partition_by
+            ]
+        if order_by:
+            self._order_by = [
+                f"{col._qualified()} DESC" if hasattr(col, "_desc") and col._desc
+                else (col._qualified() if hasattr(col, "_qualified") else str(col))
+                for col in order_by
+            ]
+
+    @property
+    def _func(self) -> str:
+        """動的生成（集計関数名 + 列式）。"""
+        return f"{self._func_name}({self._col_expr})"
 
 
 # ── JOIN ON 用カラム間比較式 ──────────────────────────────────

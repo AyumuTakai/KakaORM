@@ -550,6 +550,12 @@ python examples/fastapi_todo.py
 # View Swagger UI at http://localhost:8000/docs
 ```
 
+For detailed integration patterns, best practices, and testing strategies, see [FastAPI Integration Guide](docs/FASTAPI.md).
+Additional examples:
+- `examples/fastapi_advanced.py` — Dependency injection, multiple models, error handling
+- `examples/fastapi_pagination.py` — Pagination & filtering
+- `examples/fastapi_testing.py` — pytest + httpx testing strategies
+
 ### Pydantic-compatible Methods
 
 ```python

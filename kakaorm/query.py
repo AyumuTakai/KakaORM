@@ -158,6 +158,9 @@ class QuerySet(Generic[T]):
                 sql, params = expr._build()
                 alias = f" AS {expr._alias}" if expr._alias else ""
                 cols.append((f"({sql}){alias}", params))
+            elif hasattr(expr, "_sql_expr") and hasattr(expr, "_partition_by"):
+                # WindowFunc（ROW_NUMBER, RANK, LAG, LEAD 等）
+                cols.append((expr._sql_expr(), []))
             elif isinstance(expr, AggFunc):
                 cols.append((expr._sql_expr(), []))
             elif hasattr(expr, "_qualified"):

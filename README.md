@@ -633,6 +633,12 @@ python examples/fastapi_todo.py
 # http://localhost:8000/docs で Swagger UI を確認
 ```
 
+詳細なガイド、実装パターン、テスト戦略は [FastAPI 統合ガイド](docs/FASTAPI.md) を参照してください。
+その他の実装例：
+- `examples/fastapi_advanced.py` — 依存性注入、複数モデル、エラー処理
+- `examples/fastapi_pagination.py` — ページング & フィルタリング
+- `examples/fastapi_testing.py` — pytest + httpx テスト戦略
+
 ### Pydantic 互換メソッド
 
 ```python
