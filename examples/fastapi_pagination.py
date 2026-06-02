@@ -82,9 +82,9 @@ class PaginationResponse(BaseModel):
 async def lifespan(app: FastAPI):
     """Startup/Shutdown"""
     engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
-    plan = await Migrator(engine).plan([Author, Post])
-    if not plan.is_empty():
-        await plan.apply()
+    migrator = Migrator(engine)
+    migrator.validate_relationships([Author, Post])
+    await migrator.run([Author, Post])
 
     app.state.engine = engine
 
@@ -241,7 +241,7 @@ async def search_posts(
     if title:
         # LIKE 検索（SQLite では icontains が利用可能）
         # Note: SQLite では case-insensitive は設定が必要
-        query = query.where(Post.title.contains(title))
+        query = query.where(Post.title.like(f"%{title}%"))
 
     if status:
         query = query.where(Post.status == status)
@@ -254,10 +254,12 @@ async def search_posts(
     posts_all = await query.prefetch("author").execute()
 
     if author_name:
-        posts_all = [
-            p for p in posts_all
-            if p.author and author_name.lower() in p.author.name.lower()
-        ]
+        filtered = []
+        for p in posts_all:
+            author = await p.author  # prefetch 済みなので DB 追加クエリなし
+            if author and author_name.lower() in author.name.lower():
+                filtered.append(p)
+        posts_all = filtered
 
     # 総件数（フィルタ後）
     total = len(posts_all)
@@ -333,7 +335,7 @@ async def get_author_posts(
 
     return {
         "author": author.model_dump(),
-        "items": [PostResponse.from_orm(p) for p in posts],
+        "items": [p.model_dump() for p in posts],
         "total": total,
         "page": page,
         "page_size": page_size,

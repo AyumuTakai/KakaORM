@@ -48,9 +48,11 @@ class Post(Model):
     """投稿モデル"""
     title = StrColumn(nullable=False)
     content = StrColumn(nullable=True)
-    published = IntColumn(nullable=False, default=0)  # 0=False, 1=True
+    published = IntColumn(nullable=False, default=0)  # 0=draft, 1=published
     views = IntColumn(nullable=False, default=0)
     author_id = ForeignKey(Author, nullable=False)
+    created_at = DateTimeColumn(auto_now_add=True, nullable=False)
+    updated_at = DateTimeColumn(auto_now=True, nullable=True)
 
     # 順参照：投稿の著者
     author = belongs_to(Author, foreign_key="author_id")
@@ -101,9 +103,9 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
-    plan = await Migrator(engine).plan([Author, Post])
-    if not plan.is_empty():
-        await plan.apply()
+    migrator = Migrator(engine)
+    migrator.validate_relationships([Author, Post])
+    await migrator.run([Author, Post])
 
     app.state.engine = engine
 

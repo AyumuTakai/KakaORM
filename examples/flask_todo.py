@@ -383,9 +383,7 @@ class Todo(Model):
 async def _startup() -> kakaorm.Engine:
     """DB に接続し、スキーマを最新状態に保つ。"""
     engine = await kakaorm.connect("sqlite+aiosqlite:///./flask_todo.db")
-    plan = await Migrator(engine).plan([Todo])
-    if not plan.is_empty():
-        await plan.apply()
+    await Migrator(engine).run([Todo])
     return engine
 
 

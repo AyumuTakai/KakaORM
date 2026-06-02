@@ -17,7 +17,7 @@ import pytest_asyncio
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import kakaorm
-from kakaorm import DateColumn, DecimalColumn, IntColumn, Model, StrColumn, TimeColumn
+from kakaorm import DateColumn, DateTimeColumn, DecimalColumn, IntColumn, Model, StrColumn, TimeColumn
 
 
 # ── テスト用モデル ───────────────────────────────────────────────
@@ -40,6 +40,15 @@ class Event(Model):
         table_name = "event"
 
 
+class Log(Model):
+    message    = StrColumn(nullable=False)
+    created_at = DateTimeColumn(nullable=False)
+    updated_at = DateTimeColumn(nullable=True)
+
+    class Meta:
+        table_name = "log"
+
+
 # ── フィクスチャ ─────────────────────────────────────────────────
 
 @pytest_asyncio.fixture
@@ -47,6 +56,7 @@ async def engine():
     eng = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
     await eng.create_table(Product)
     await eng.create_table(Event)
+    await eng.create_table(Log)
     yield eng
     await eng.disconnect()
 
@@ -177,3 +187,59 @@ async def test_all_types_together(engine):
     assert ev.start_time == datetime.time(8, 45, 0)
     assert pr.price == Decimal("3500.00")
     assert pr.tax_rate == Decimal("0.1000")
+
+
+# ── DateTimeColumn テスト ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_datetime_round_trip(engine):
+    dt = datetime.datetime(2026, 6, 2, 0, 38, 3, 768346)
+    log = await Log.create(message="hello", created_at=dt, updated_at=None)
+    fetched = await Log.get(Log.id == log.id)
+    assert isinstance(fetched.created_at, datetime.datetime)
+    assert fetched.created_at == dt
+
+
+@pytest.mark.asyncio
+async def test_datetime_null(engine):
+    dt = datetime.datetime(2026, 1, 1, 12, 0, 0)
+    log = await Log.create(message="nullable", created_at=dt, updated_at=None)
+    fetched = await Log.get(Log.id == log.id)
+    assert fetched.updated_at is None
+
+
+@pytest.mark.asyncio
+async def test_datetime_update(engine):
+    dt1 = datetime.datetime(2026, 1, 1, 0, 0, 0)
+    dt2 = datetime.datetime(2026, 6, 2, 15, 30, 0)
+    log = await Log.create(message="upd", created_at=dt1, updated_at=None)
+    log.created_at = dt2
+    await log.save()
+    fetched = await Log.get(Log.id == log.id)
+    assert isinstance(fetched.created_at, datetime.datetime)
+    assert fetched.created_at == dt2
+
+
+@pytest.mark.asyncio
+async def test_datetime_where(engine):
+    dt1 = datetime.datetime(2026, 1, 1, 0, 0, 0)
+    dt2 = datetime.datetime(2026, 6, 2, 0, 0, 0)
+    await Log.create(message="first", created_at=dt1, updated_at=None)
+    await Log.create(message="second", created_at=dt2, updated_at=None)
+    results = await Log.where(Log.created_at == dt1)
+    assert len(results) == 1
+    assert results[0].message == "first"
+
+
+# ── DDL 変換テスト ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_datetime_ddl_uses_datetime_type(engine):
+    """SQLite の CREATE TABLE で DATETIME 型が使われることを確認する。"""
+    rows = await engine.fetch(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='log'"
+    )
+    assert rows, "log テーブルが見つかりません"
+    ddl = rows[0]["sql"]
+    assert "DATETIME" in ddl, f"DDL に DATETIME が含まれていません: {ddl}"
+    assert "TIMESTAMP" not in ddl, f"DDL に未変換の TIMESTAMP が残っています: {ddl}"

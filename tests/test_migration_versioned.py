@@ -46,7 +46,7 @@ class TestVersionedMigrator:
     async def test_run_applies_all_migrations(self, engine):
         """全マイグレーションが未適用なら全て実行されること。"""
         migrator = VersionedMigrator(engine)
-        count = await migrator.run({
+        count = await migrator.run_manual({
             "001_create_user_v": lambda: engine.create_table(UserV),
             "002_create_post_v": lambda: engine.create_table(PostV),
         })
@@ -59,16 +59,16 @@ class TestVersionedMigrator:
             "001_create_user_v": lambda: engine.create_table(UserV),
             "002_create_post_v": lambda: engine.create_table(PostV),
         }
-        first  = await migrator.run(migrations)
-        second = await migrator.run(migrations)
+        first  = await migrator.run_manual(migrations)
+        second = await migrator.run_manual(migrations)
         assert first  == 2
         assert second == 0
 
     async def test_run_applies_only_new_migrations(self, engine):
         """追加されたマイグレーションだけが実行されること。"""
         migrator = VersionedMigrator(engine)
-        await migrator.run({"001_create_user_v": lambda: engine.create_table(UserV)})
-        count = await migrator.run({
+        await migrator.run_manual({"001_create_user_v": lambda: engine.create_table(UserV)})
+        count = await migrator.run_manual({
             "001_create_user_v": lambda: engine.create_table(UserV),
             "002_create_post_v": lambda: engine.create_table(PostV),
         })
@@ -77,14 +77,14 @@ class TestVersionedMigrator:
     async def test_applied_names_returns_set(self, engine):
         """applied_names() が正しい名前セットを返すこと。"""
         migrator = VersionedMigrator(engine)
-        await migrator.run({"001_create_user_v": lambda: engine.create_table(UserV)})
+        await migrator.run_manual({"001_create_user_v": lambda: engine.create_table(UserV)})
         names = await migrator.applied_names()
         assert "001_create_user_v" in names
 
     async def test_history_returns_records_in_order(self, engine):
         """history() が MigrationRecord のリストを時系列順で返すこと。"""
         migrator = VersionedMigrator(engine)
-        await migrator.run({
+        await migrator.run_manual({
             "001_create_user_v": lambda: engine.create_table(UserV),
             "002_create_post_v": lambda: engine.create_table(PostV),
         })
@@ -97,7 +97,7 @@ class TestVersionedMigrator:
     async def test_run_executes_callable_correctly(self, engine):
         """callable が実際に実行されてテーブルが作られること。"""
         migrator = VersionedMigrator(engine)
-        await migrator.run({"001_create_user_v": lambda: engine.create_table(UserV)})
+        await migrator.run_manual({"001_create_user_v": lambda: engine.create_table(UserV)})
         # テーブルが存在することを確認
         await UserV.create(name="Test")
         user = await UserV.get(UserV.name == "Test")

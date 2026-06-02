@@ -152,9 +152,7 @@ async def test_engine():
     engine = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
 
     # マイグレーション実行
-    plan = await Migrator(engine).plan([User, Post])
-    if not plan.is_empty():
-        await plan.apply()
+    await Migrator(engine).run([User, Post])
 
     yield engine
 

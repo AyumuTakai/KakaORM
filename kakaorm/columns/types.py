@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 import datetime
-from datetime import datetime as _datetime
+from datetime import datetime as _datetime, timezone as _timezone
 from decimal import Decimal
 from typing import Any
 
@@ -21,11 +21,11 @@ class IntColumn(Column[int]):
         super().__init__(**kwargs)
         self.auto_increment = auto_increment
 
-    def ddl_fragment(self) -> str:
+    def ddl_fragment(self, quote_fn=None) -> str:
         if self.auto_increment and self.primary_key:
             # PostgreSQL: SERIAL / SQLite: INTEGER PRIMARY KEY AUTOINCREMENT
             return "SERIAL PRIMARY KEY"
-        return super().ddl_fragment()
+        return super().ddl_fragment(quote_fn)
 
 
 class StrColumn(Column[str]):
@@ -54,16 +54,30 @@ class DateTimeColumn(Column[_datetime]):
         self.auto_now = auto_now
         self.auto_now_add = auto_now_add
 
+    def from_db(self, value: Any) -> _datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, _datetime):
+            return value
+        return _datetime.fromisoformat(str(value))
+
+    def to_db(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, _datetime):
+            return value.isoformat()
+        return str(value)
+
     def get_insert_value(self, value: Any) -> Any:
         """INSERT 時に auto_now_add なら現在時刻を差し込む。"""
         if self.auto_now_add and value is None:
-            return _datetime.utcnow()
+            return _datetime.now(_timezone.utc)
         return value
 
     def get_update_value(self, value: Any) -> Any:
         """UPDATE 時に auto_now なら現在時刻を差し込む。"""
         if self.auto_now:
-            return _datetime.utcnow()
+            return _datetime.now(_timezone.utc)
         return value
 
 
@@ -80,10 +94,11 @@ class ForeignKey(Column[int]):
         self._related_model = related_model
         self.on_delete = on_delete
 
-    def ddl_fragment(self) -> str:
-        base = super().ddl_fragment()
+    def ddl_fragment(self, quote_fn=None) -> str:
+        _q = quote_fn or (lambda x: x)
+        base = super().ddl_fragment(quote_fn)
         table = self._resolve_table()
-        return f"{base} REFERENCES {table}(id) ON DELETE {self.on_delete}"
+        return f"{base} REFERENCES {_q(table)}({_q('id')}) ON DELETE {self.on_delete}"
 
     def _resolve_table(self) -> str:
         if isinstance(self._related_model, str):

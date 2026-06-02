@@ -27,7 +27,7 @@ import kakaorm
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from kakaorm import BoolColumn, Model, StrColumn
+from kakaorm import BoolColumn, DateTimeColumn, Model, StrColumn
 from kakaorm.migration import Migrator
 from pydantic import BaseModel  # リクエストボディ用スキーマにのみ使用
 
@@ -40,6 +40,8 @@ class Todo(Model):
     title = StrColumn(nullable=False)
     description = StrColumn(nullable=True)
     completed = BoolColumn(nullable=False, default=False)
+    created_at = DateTimeColumn(auto_now_add=True, nullable=False)
+    updated_at = DateTimeColumn(auto_now=True, nullable=True)
 
     class Meta:
         table_name = "todo"
@@ -65,10 +67,7 @@ class TodoUpdate(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     engine = await kakaorm.connect("sqlite+aiosqlite:///./todo.db")
-    migrator = Migrator(engine)
-    plan = await migrator.plan([Todo])
-    if not plan.is_empty():
-        await plan.apply()
+    await Migrator(engine).run([Todo])
     yield
     await engine.disconnect()
 

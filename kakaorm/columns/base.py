@@ -611,7 +611,7 @@ class Column(Generic[T]):
 
     # ── DDL ──────────────────────────────────────────────────
 
-    def ddl_fragment(self) -> str:
+    def ddl_fragment(self, quote_fn=None) -> str:
         """CREATE TABLE 用の列定義文字列を返す。"""
         parts = [self.sql_type]
         if self.primary_key:
