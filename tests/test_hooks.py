@@ -2,9 +2,10 @@
 イベントフック テスト
 """
 
+import datetime
 import pytest
 import kakaorm
-from kakaorm import Model, StrColumn, IntColumn
+from kakaorm import Model, StrColumn, IntColumn, DateTimeColumn
 
 
 class AuditedUser(Model):
@@ -113,3 +114,62 @@ class TestEventHooks:
         await bare.after_update()
         await bare.before_delete()
         await bare.after_delete()
+
+
+# ── auto_now_add / auto_now の bulk 操作テスト ─────────────────
+
+class TimestampedItem(Model):
+    name       = StrColumn(nullable=False)
+    created_at = DateTimeColumn(auto_now_add=True, nullable=True)
+    updated_at = DateTimeColumn(auto_now=True, nullable=True)
+
+    class Meta:
+        table_name = "timestamped_item"
+
+
+@pytest.fixture
+async def ts_engine():
+    eng = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
+    await eng.create_table(TimestampedItem)
+    yield eng
+    await eng.disconnect()
+
+
+class TestAutoNowBulkHooks:
+    async def test_auto_now_add_applied_in_bulk_create(self, ts_engine):
+        """bulk_create() で auto_now_add が各インスタンスに設定されること。"""
+        items = [TimestampedItem(name=f"item{i}") for i in range(3)]
+        await TimestampedItem.bulk_create(items)
+        for item in items:
+            fetched = await TimestampedItem.get(TimestampedItem.id == item.id)
+            assert isinstance(fetched.created_at, datetime.datetime), (
+                f"created_at が datetime でない: {fetched.created_at!r}"
+            )
+
+    async def test_auto_now_applied_in_bulk_update(self, ts_engine):
+        """bulk_update() で auto_now が各インスタンスに設定されること。"""
+        items = [await TimestampedItem.create(name=f"before{i}") for i in range(3)]
+        # 一度目の updated_at を記録
+        first_timestamps = [item.updated_at for item in items]
+
+        for item in items:
+            item.name = f"after{item.id}"
+        await TimestampedItem.bulk_update(items, fields=["name"])
+
+        for item, before in zip(items, first_timestamps):
+            fetched = await TimestampedItem.get(TimestampedItem.id == item.id)
+            assert isinstance(fetched.updated_at, datetime.datetime), (
+                f"updated_at が datetime でない: {fetched.updated_at!r}"
+            )
+
+    async def test_auto_now_applied_even_when_not_in_fields(self, ts_engine):
+        """bulk_update(fields=["name"]) でも auto_now 列は更新されること。"""
+        item = await TimestampedItem.create(name="original")
+        old_updated_at = item.updated_at
+
+        item.name = "changed"
+        await TimestampedItem.bulk_update([item], fields=["name"])
+
+        fetched = await TimestampedItem.get(TimestampedItem.id == item.id)
+        assert fetched.name == "changed"
+        assert isinstance(fetched.updated_at, datetime.datetime)

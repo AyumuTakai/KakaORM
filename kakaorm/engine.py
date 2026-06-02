@@ -99,6 +99,17 @@ class Engine(ABC):
         """カラム DDL を DB 方言に合わせて変換する。デフォルトはそのまま返す。"""
         return ddl
 
+    def _current_timestamp_default(self) -> str:
+        """
+        auto_now_add / auto_now 列を既存テーブルに ADD COLUMN するときに使う
+        DEFAULT 句を返す。既存行の NOT NULL 制約を満たすためのフォールバック値。
+
+        PostgreSQL / MySQL は CURRENT_TIMESTAMP を使える。
+        SQLite は ALTER TABLE ADD COLUMN で CURRENT_TIMESTAMP が非定数扱いとなるため
+        リテラル文字列で代替する（サブクラスでオーバーライド）。
+        """
+        return "DEFAULT CURRENT_TIMESTAMP"
+
     def _post_process_col_defs(self, col_defs: list[str]) -> list[str]:
         """カラム定義リストの後処理。デフォルトはそのまま返す。"""
         return col_defs
@@ -255,9 +266,19 @@ class Engine(ABC):
         """指定フィールドのみ UPDATE する。fields が None なら全非 PK フィールドを更新。"""
         meta = instance._meta
         pk_name = meta.pk_name
+
+        # auto_now など更新時フックを適用する
+        for name, col in meta.columns.items():
+            if hasattr(col, "get_update_value"):
+                instance._data[name] = col.get_update_value(instance._data.get(name))
+
         col_names = [
             name for name, col in meta.columns.items()
-            if not col.primary_key and (fields is None or name in fields)
+            if not col.primary_key and (
+                fields is None
+                or name in fields
+                or getattr(col, "auto_now", False)
+            )
         ]
         if not col_names:
             return
@@ -289,7 +310,7 @@ class Engine(ABC):
         meta = model_cls._meta
         exists = "IF NOT EXISTS " if if_not_exists else ""
         col_defs = [
-            f"  {self.quote_identifier(col_name)} {self._adapt_ddl(col.ddl_fragment())}"
+            f"  {self.quote_identifier(col_name)} {self._adapt_ddl(col.ddl_fragment(quote_fn=self.quote_identifier))}"
             for col_name, col in meta.columns.items()
         ]
         col_defs = self._post_process_col_defs(col_defs)
@@ -340,14 +361,14 @@ class Engine(ABC):
             if getattr(col, "auto_increment", False):
                 archive_col = IntColumn(primary_key=col.primary_key, nullable=col.nullable)
                 archive_col._name = col_name
-                ddl = self._adapt_ddl(archive_col.ddl_fragment())
+                ddl = self._adapt_ddl(archive_col.ddl_fragment(quote_fn=self.quote_identifier))
             else:
-                ddl = self._adapt_ddl(col.ddl_fragment())
+                ddl = self._adapt_ddl(col.ddl_fragment(quote_fn=self.quote_identifier))
             col_defs.append(f"  {self.quote_identifier(col_name)} {ddl}")
 
         archived_at_col = DateTimeColumn(nullable=False)
         archived_at_col._name = "archived_at"
-        archived_at_ddl = self._adapt_ddl(archived_at_col.ddl_fragment())
+        archived_at_ddl = self._adapt_ddl(archived_at_col.ddl_fragment(quote_fn=self.quote_identifier))
         col_defs.append(f"  {self.quote_identifier('archived_at')} {archived_at_ddl} NOT NULL")
 
         col_defs = self._post_process_col_defs(col_defs)
@@ -481,6 +502,14 @@ class AsyncpgEngine(Engine):
         if not cols:
             return
 
+        # auto_now_add など挿入時フックを全インスタンスに適用する
+        for inst in instances:
+            for name, col in meta.columns.items():
+                if hasattr(col, "get_insert_value"):
+                    new_val = col.get_insert_value(inst._data.get(name))
+                    if new_val is not None:
+                        inst._data[name] = new_val
+
         n_cols = len(cols)
         row_phs = [
             "(" + ", ".join(f"${i * n_cols + j + 1}" for j in range(n_cols)) + ")"
@@ -553,19 +582,22 @@ class AioSQLiteEngine(Engine):
     def _adapt_ddl(self, ddl: str) -> str:
         ddl = ddl.replace("SERIAL PRIMARY KEY", "INTEGER PRIMARY KEY AUTOINCREMENT")
         ddl = ddl.replace("DOUBLE PRECISION", "REAL")
-        ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "TEXT")
+        ddl = ddl.replace("TIMESTAMP WITH TIME ZONE", "DATETIME")
         ddl = ddl.replace("BOOLEAN", "INTEGER")
         ddl = re.sub(r"^DATE\b", "TEXT", ddl)
         ddl = re.sub(r"^TIME\b", "TEXT", ddl)
         return ddl
 
-    def _post_process_col_defs(self, col_defs: list[str]) -> list[str]:
-        return [re.sub(r"\s+REFERENCES\s+\w+\(\w+\).*", "", d) for d in col_defs]
+    def _current_timestamp_default(self) -> str:
+        # SQLite は ALTER TABLE ADD COLUMN で CURRENT_TIMESTAMP が非定数扱いとなるため
+        # リテラル文字列を使用する。epoch をフォールバック値とする。
+        return "DEFAULT '1970-01-01 00:00:00'"
 
     async def connect(self) -> None:
         import aiosqlite  # type: ignore
         self._conn = await aiosqlite.connect(self._path)
         self._conn.row_factory = aiosqlite.Row
+        await self._conn.execute("PRAGMA foreign_keys = ON")
 
     async def disconnect(self) -> None:
         if self._conn:
@@ -621,6 +653,14 @@ class AioSQLiteEngine(Engine):
         # SQLite のバインド変数上限 (999) を超えないよう分割
         max_rows = max(1, 999 // len(cols))
 
+        # auto_now_add など挿入時フックを全インスタンスに適用する
+        for inst in instances:
+            for name, col in meta.columns.items():
+                if hasattr(col, "get_insert_value"):
+                    new_val = col.get_insert_value(inst._data.get(name))
+                    if new_val is not None:
+                        inst._data[name] = new_val
+
         for i in range(0, len(instances), max_rows):
             batch = instances[i : i + max_rows]
             all_params = [
@@ -651,9 +691,20 @@ class AioSQLiteEngine(Engine):
             return
         meta = instances[0]._meta
         pk_name = meta.pk_name
+
+        # auto_now など更新時フックを全インスタンスに適用する
+        for inst in instances:
+            for name, col in meta.columns.items():
+                if hasattr(col, "get_update_value"):
+                    inst._data[name] = col.get_update_value(inst._data.get(name))
+
         col_names = [
             name for name, col in meta.columns.items()
-            if not col.primary_key and (fields is None or name in fields)
+            if not col.primary_key and (
+                fields is None
+                or name in fields
+                or getattr(col, "auto_now", False)
+            )
         ]
         if not col_names:
             return
@@ -795,6 +846,14 @@ class AioMySQLEngine(Engine):
         meta = instance._meta
         pk_name = meta.pk_name
         is_auto = meta.is_auto_pk
+
+        # auto_now_add など挿入時フックを適用してから列を収集する
+        for name, col in meta.columns.items():
+            if hasattr(col, "get_insert_value"):
+                new_val = col.get_insert_value(instance._data.get(name))
+                if new_val is not None:
+                    instance._data[name] = new_val
+
         cols = [c for c in meta.columns.keys() if instance._data.get(c) is not None or c == pk_name]
         if is_auto and pk_name in cols:
             cols.remove(pk_name)

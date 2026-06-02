@@ -101,3 +101,33 @@ class TestStringModelReference:
         writer = await Writer.get(Writer.name == "Alice")
         articles = await writer.articles  # Writer.articles は "Article" 文字列参照
         assert len(articles) == 2
+
+
+class TestForeignKeyCascade:
+    async def test_on_delete_cascade(self, seeded):
+        """親レコード削除時に子レコードが CASCADE で自動削除されること。"""
+        alice = await Writer.get(Writer.name == "Alice")
+        alice_id = alice.id
+        await alice.delete()
+        orphans = await Article.where(Article.writer_id == alice_id)
+        assert orphans == [], f"CASCADE が機能せず記事が残っています: {orphans}"
+
+    async def test_other_rows_unaffected(self, seeded):
+        """CASCADE は削除した親に紐づく子のみを削除し、他の行は残ること。"""
+        alice = await Writer.get(Writer.name == "Alice")
+        await alice.delete()
+        bob_articles = await Article.where(Article.writer_id != None)  # noqa: E711
+        assert len(bob_articles) == 1
+        assert bob_articles[0].title == "Go Basics"
+
+    async def test_fk_ddl_quoted(self, engine):
+        """REFERENCES 句の参照先テーブル名・カラム名がクォートされること。"""
+        rows = await engine.fetch(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='article'"
+        )
+        assert rows, "article テーブルが見つかりません"
+        ddl = rows[0]["sql"]
+        # SQLite の quote_identifier は [name] 形式
+        assert "REFERENCES [writer]([id])" in ddl, (
+            f"REFERENCES 句のクォートが不正です: {ddl}"
+        )

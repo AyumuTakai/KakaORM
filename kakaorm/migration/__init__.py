@@ -102,6 +102,46 @@ class Migrator:
     def __init__(self, engine: Any) -> None:
         self.engine = engine
 
+    def validate_relationships(self, models: list[Type[Any]]) -> None:
+        """
+        モデルリストの文字列リレーション参照を検証する。
+
+        ``has_many("Post", ...)`` / ``has_one("Profile", ...)`` / ``belongs_to("Author", ...)``
+        の文字列モデル名が実際に解決できるかをチェックし、
+        未解決の参照を **まとめて** :class:`LookupError` で報告する。
+
+        :param models: 検証対象のモデルクラスリスト。
+        :raises LookupError: 解決できない文字列参照が 1 件以上ある場合。
+
+        使い方::
+
+            migrator = Migrator(engine)
+            migrator.validate_relationships([User, Post])  # タイポがあれば即 LookupError
+        """
+        from kakaorm.relationship import _RelationshipDescriptor, _all_subclasses
+        from kakaorm.model import Model
+
+        known_names = {sub.__name__ for sub in _all_subclasses(Model)}
+        errors: list[str] = []
+
+        for model_cls in models:
+            for attr_name, attr_val in model_cls.__dict__.items():
+                if (
+                    isinstance(attr_val, _RelationshipDescriptor)
+                    and isinstance(attr_val._related_model, str)
+                    and attr_val._related_model not in known_names
+                ):
+                    errors.append(
+                        f"  {model_cls.__name__}.{attr_name}: "
+                        f"related model {attr_val._related_model!r} not found"
+                    )
+
+        if errors:
+            raise LookupError(
+                "Unresolved relationship string references detected:\n"
+                + "\n".join(errors)
+            )
+
     async def plan(self, models: list[Type[Any]]) -> MigrationPlan:
         """
         モデルリストと現在の DB スキーマを比較し、差分プランを返す。
@@ -112,6 +152,7 @@ class Migrator:
         ArchiveModel サブクラス（``_archive_table_name`` 属性を持つモデル）は
         アーカイブテーブルも自動的に差分計算の対象に含める。
         """
+        self.validate_relationships(models)
         plan = MigrationPlan(engine=self.engine)
 
         # ArchiveModel のアーカイブテーブルを expanded_models に追加
@@ -146,8 +187,18 @@ class Migrator:
                 # 追加されたカラム
                 for col_name, col in model_cols.items():
                     if col_name not in db_cols:
-                        nullable_default = "DEFAULT NULL" if col.nullable else ""
-                        ddl = col.ddl_fragment()
+                        if col.nullable:
+                            nullable_default = "DEFAULT NULL"
+                        elif getattr(col, "auto_now_add", False) or getattr(col, "auto_now", False):
+                            # auto_now_add / auto_now は Python 側で値を注入するが、
+                            # 既存行への NOT NULL 制約を満たすために ADD COLUMN 時のみ
+                            # DB レベルのデフォルト値を付与する（DB 方言ごとに異なる）。
+                            nullable_default = self.engine._current_timestamp_default()
+                        else:
+                            nullable_default = ""
+                        ddl = self.engine._adapt_ddl(
+                            col.ddl_fragment(quote_fn=self.engine.quote_identifier)
+                        )
                         quoted_table = self.engine.quote_identifier(table)
                         quoted_col = self.engine.quote_identifier(col_name)
                         stmt = f"ALTER TABLE {quoted_table} ADD COLUMN {quoted_col} {ddl} {nullable_default}".strip()
@@ -322,7 +373,7 @@ class Migrator:
     def _build_create_table(self, model_cls: Any) -> str:
         meta = model_cls._meta
         col_defs = [
-            f"  {self.engine.quote_identifier(col_name)} {self.engine._adapt_ddl(col.ddl_fragment())}"
+            f"  {self.engine.quote_identifier(col_name)} {self.engine._adapt_ddl(col.ddl_fragment(quote_fn=self.engine.quote_identifier))}"
             for col_name, col in meta.columns.items()
         ]
         col_defs = self.engine._post_process_col_defs(col_defs)
@@ -415,11 +466,10 @@ class VersionedMigrator(Migrator):
         applied = await migrator.run_files("./migrations")   # 未適用を一括適用
         await migrator.downgrade(steps=1)                    # 直近 1 件をロールバック
 
-        # 手動マイグレーション（後方互換）
-        migrations = {
+        # 手動マイグレーション
+        await migrator.run_manual({
             "001_create_users": lambda: engine.create_table(User),
-        }
-        await migrator.run(migrations)
+        })
     """
 
     HISTORY_TABLE = "kakaorm_migrations"
@@ -518,19 +568,26 @@ class VersionedMigrator(Migrator):
 
         return count
 
-    async def run(
+    async def run_manual(
         self,
         migrations: dict[str, Callable],
         *,
         verbose: bool = False,
     ) -> int:
         """
-        未適用のマイグレーションのみ実行し、履歴に記録する。
+        手動マイグレーションの辞書を受け取り、未適用分のみ実行して履歴に記録する。
 
         :param migrations: ``{name: async_callable}`` の順序付き辞書。
                            callable は引数なしの非同期関数。
         :param verbose:    True のとき実行中のマイグレーション名を標準出力へ出力。
         :returns:          実行したマイグレーション数。
+
+        使い方::
+
+            migrator = VersionedMigrator(engine)
+            await migrator.run_manual({
+                "001_create_users": lambda: engine.create_table(User),
+            })
         """
         await self.ensure_history_table()
         applied = await self.applied_names()
