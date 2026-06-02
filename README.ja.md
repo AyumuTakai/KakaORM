@@ -418,6 +418,11 @@ pytest tests/test_mysql.py
 - 接続するデータベースに応じたドライバ (`aiosqlite` / `asyncpg` / `psycopg[binary]` / `aiomysql`)
 - Pydantic v2 統合を使う場合: `pip install pydantic`（省略可能 — 未インストールでも ORM 本体は動作する）
 
+## AI エージェント向け
+
+LLM・AI コーディングアシスタント向けの凝縮チートシートを [`llms.txt`](https://github.com/AyumuTakai/KakaORM/blob/main/llms.txt) に用意しています。
+API 全体・避けるべきアンチパターン・コピー可能なコードスニペットを LLM のコンテキストウィンドウに最適化した形式で収録しています。
+
 ## ライセンス
 
 [MIT License](https://github.com/AyumuTakai/KakaORM/blob/main/LICENSE)

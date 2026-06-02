@@ -440,6 +440,11 @@ pytest tests/test_mysql.py
 - The appropriate driver for your database (`aiosqlite` / `asyncpg` / `psycopg[binary]` / `aiomysql`)
 - For Pydantic v2 integration: `pip install pydantic` (optional — the ORM core works without it)
 
+## For AI Agents
+
+A condensed cheat-sheet for LLMs and AI coding assistants is available at [`llms.txt`](https://github.com/AyumuTakai/KakaORM/blob/main/llms.txt).
+It covers the full API, anti-patterns to avoid, and copy-ready code snippets — optimised for use in an LLM context window.
+
 ## License
 
 [MIT License](https://github.com/AyumuTakai/KakaORM/blob/main/LICENSE)

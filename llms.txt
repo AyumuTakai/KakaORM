@@ -1,0 +1,408 @@
+# KakaORM
+
+> Async-native ORM for PostgreSQL, SQLite, and MySQL/MariaDB.
+> Version: 0.4.5 | Python 3.11+ | asyncio only
+
+---
+
+## Installation
+
+```bash
+pip install "kakaorm[aiosqlite]"    # SQLite (dev/test)
+pip install "kakaorm[asyncpg]"      # PostgreSQL
+pip install "kakaorm[aiomysql]"     # MySQL
+```
+
+---
+
+## Minimal Setup
+
+```python
+import asyncio
+import kakaorm
+from kakaorm import Model, IntColumn, StrColumn, DateTimeColumn, ForeignKey
+from kakaorm.migration import Migrator
+
+class Author(Model):
+    name  = StrColumn(nullable=False)
+    email = StrColumn(unique=True, nullable=False)
+    class Meta:
+        table_name = "author"
+
+class Post(Model):
+    title     = StrColumn(nullable=False)
+    author_id = ForeignKey(Author, on_delete="CASCADE")
+    created_at = DateTimeColumn(auto_now_add=True, nullable=False)
+    class Meta:
+        table_name = "post"
+
+async def main():
+    engine = await kakaorm.connect("sqlite+aiosqlite:///dev.db")
+    await Migrator(engine).run([Author, Post])   # create/update tables
+
+asyncio.run(main())
+```
+
+---
+
+## Column Types — Quick Reference
+
+| Class | Python type | SQL type | Notes |
+|---|---|---|---|
+| `IntColumn` | `int` | INTEGER | |
+| `StrColumn` | `str` | TEXT / VARCHAR(n) | `max_length=n` → VARCHAR |
+| `FloatColumn` | `float` | DOUBLE PRECISION | **not for money** |
+| `BoolColumn` | `bool` | BOOLEAN | |
+| `DateTimeColumn` | `datetime` | TIMESTAMP WITH TIME ZONE | |
+| `DateColumn` | `date` | DATE | date only, no time |
+| `TimeColumn` | `time` | TIME | time only, no date |
+| `DecimalColumn` | `Decimal` | NUMERIC(p, s) | **use for money/finance** |
+| `ForeignKey` | `int` | INTEGER REFERENCES ... | |
+
+**Key decisions:**
+- Money / prices → `DecimalColumn(max_digits=10, decimal_places=2)`, never `FloatColumn`
+- Text with length limit → `StrColumn(max_length=200)`, unlimited → `StrColumn()`
+- Timestamp with timezone → `DateTimeColumn`, date only → `DateColumn`
+
+**Common options** (all column types):
+```python
+StrColumn(
+    nullable=True,       # default — NULL allowed; set False to enforce NOT NULL
+    default=None,        # Python-side default
+    unique=False,
+    primary_key=False,
+    index=False,         # single-column index
+    check="value > 0",   # CHECK constraint
+)
+IntColumn(auto_increment=True)          # SERIAL PRIMARY KEY (PG) / AUTOINCREMENT (SQLite)
+DateTimeColumn(auto_now_add=True)       # set UTC now on INSERT (not overridable)
+DateTimeColumn(auto_now=True)           # set UTC now on every UPDATE (not overridable)
+ForeignKey(Author, on_delete="CASCADE") # CASCADE | SET NULL | RESTRICT | NO ACTION
+```
+
+---
+
+## CRITICAL: Anti-Patterns
+
+```python
+# ❌ WRONG — Column() does not accept positional args
+name = Column(str)
+age  = IntColumn(int)
+
+# ✅ CORRECT — always use the type-specific class
+name = StrColumn()
+age  = IntColumn()
+
+# ❌ WRONG — ColumnMeta is a query builder, not a value
+post = Post(title=Post.title)
+post = Post(title=(Post.title == "foo"))
+
+# ✅ CORRECT
+post = Post(title="actual string")
+
+# ❌ WRONG — FloatColumn for financial data
+price = FloatColumn()   # floating-point rounding errors
+
+# ✅ CORRECT
+price = DecimalColumn(max_digits=10, decimal_places=2)
+
+# ❌ WRONG — WhereClause as update value
+await Post.all().update(title=(Post.title == "foo"))
+
+# ✅ CORRECT — use .where() to filter, keyword args to set values
+await Post.where(Post.published == False).update(title="New Title")
+
+# ❌ WRONG — plan().apply() is verbose
+plan = await migrator.plan([Author, Post])
+await plan.apply()
+
+# ✅ CORRECT — run() is the one-liner (no-op when schema is current)
+await Migrator(engine).run([Author, Post])
+```
+
+---
+
+## CRUD
+
+```python
+# Create
+author = await Author.create(name="Alice", email="alice@example.com")
+print(author.id)   # DB-generated PK
+
+# Read
+author  = await Author.get(Author.email == "alice@example.com")  # raises NotFound if missing
+author  = await Author.get_or_none(Author.id == 1)               # returns None if missing
+author  = await Author.find(1)                                   # PK lookup, None if missing
+authors = await Author.all()
+first   = await Author.first()
+
+# Update
+author.name = "Alicia"
+await author.save()
+
+# QuerySet bulk update
+await Post.where(Post.published == False).update(published=True)
+
+# Delete
+await author.delete()
+await Post.where(Post.views == 0).delete()
+```
+
+---
+
+## Querying (QuerySet)
+
+All queries are lazy — SQL runs only when awaited.
+
+```python
+# WHERE
+posts = await Post.where(Post.published == True)
+posts = await Post.where(Post.views > 100)
+posts = await Post.where(Post.title.like("%python%"))
+posts = await Post.where(Post.author_id.in_([1, 2, 3]))
+posts = await Post.where(Post.deleted_at.is_null())
+
+# Logical operators
+from kakaorm import Model
+clause = (Post.published == True) & (Post.views > 100)   # AND
+clause = (Post.published == True) | (Post.views > 1000)  # OR
+clause = ~(Post.published == True)                        # NOT
+
+# Ordering, limiting
+posts = await Post.all().order_by(Post.created_at.desc).limit(10).offset(20)
+
+# Chaining
+posts = await (
+    Post.where(Post.published == True)
+        .order_by(Post.views.desc)
+        .limit(5)
+)
+
+# Existence
+exists = await Post.where(Post.published == False).exists()  # bool
+count  = await Post.all().count()
+```
+
+---
+
+## Aggregation
+
+```python
+from kakaorm import Count, Sum, Avg, Max, Min
+
+# Single-value shortcuts
+total = await Post.all().sum(Post.views)
+avg   = await Post.all().avg(Post.score)
+hi    = await Post.all().max(Post.views)
+lo    = await Post.all().min(Post.score)
+
+# Multiple aggregates in one SQL query
+stats = await Post.where(Post.published == True).aggregate(
+    total_views = Sum(Post.views),
+    avg_score   = Avg(Post.score),
+    post_count  = Count(Post.id),
+)
+# {"total_views": 12500, "avg_score": 3.8, "post_count": 42}
+
+# GROUP BY + HAVING
+rows = await (
+    Post.all()
+        .select(Post.author_id, Count(Post.id).label("cnt"), Sum(Post.views).label("views"))
+        .group_by(Post.author_id)
+        .having(Count(Post.id) >= 2)
+        .order_by(Sum(Post.views).desc)
+)
+```
+
+---
+
+## Relations
+
+```python
+from kakaorm import has_many, has_one, belongs_to
+
+class Author(Model):
+    name  = StrColumn(nullable=False)
+    posts = has_many("Post", foreign_key="author_id")
+    class Meta:
+        table_name = "author"
+
+class Post(Model):
+    title     = StrColumn(nullable=False)
+    author_id = ForeignKey(Author, on_delete="CASCADE")
+    author    = belongs_to("Author", foreign_key="author_id")
+    class Meta:
+        table_name = "post"
+
+# Lazy access
+post   = await Post.find(1)
+author = await post.author        # 1 SQL
+
+# Eager loading (eliminates N+1)
+posts = await Post.all().prefetch("author")
+for post in posts:
+    print(post._prefetched["author"].name)  # no extra SQL
+```
+
+---
+
+## Validation
+
+```python
+from kakaorm.validators import min_length, max_length, min_value, regex, one_of
+from kakaorm import ValidationError
+
+class User(Model):
+    name  = StrColumn(nullable=False, validators=[min_length(2), max_length(50)])
+    age   = IntColumn(validators=[min_value(0)])
+    email = StrColumn(validators=[regex(r"^[^@]+@[^@]+\.[^@]+$")])
+    role  = StrColumn(validators=[one_of("admin", "user", "guest")])
+    class Meta:
+        table_name = "user"
+
+try:
+    await User.create(name="A", age=-1)
+except ValidationError as e:
+    print(e.errors)  # {"name": ["..."], "age": ["..."]}
+```
+
+---
+
+## Migrations
+
+```python
+from kakaorm.migration import Migrator, VersionedMigrator
+
+# ── Simple (recommended for small projects / startup sync) ──
+migrator = Migrator(engine)
+await migrator.run([Author, Post])          # no-op if schema is current
+
+# ── Inspect before applying ──
+plan = await migrator.plan([Author, Post])
+print(plan.sql)        # UP SQL
+print(plan.is_empty()) # True when no changes
+await plan.apply()
+await plan.apply_down()  # rollback
+
+# ── File-based versioned migrations (recommended for production) ──
+vmigrator = VersionedMigrator(engine)
+path = await vmigrator.autogenerate([Author, Post], "./migrations", name="add_bio")
+n    = await vmigrator.run_files("./migrations")   # apply pending
+await vmigrator.downgrade(steps=1)                 # rollback latest
+history = await vmigrator.history()                # list applied
+```
+
+---
+
+## Transactions
+
+```python
+async with engine.transaction():
+    author = await Author.create(name="Alice", email="alice@example.com")
+    await Post.create(title="Hello", author_id=author.id)
+    # commits on exit, rolls back on exception
+```
+
+---
+
+## Upsert / Bulk
+
+```python
+# get_or_create — returns (instance, created: bool)
+author, created = await Author.get_or_create(
+    email="alice@example.com",
+    defaults={"name": "Alice"},
+)
+
+# update_or_create
+post, created = await Post.update_or_create(
+    slug="hello-world",
+    defaults={"title": "Hello World", "published": True},
+)
+
+# Bulk INSERT
+posts = [Post(title=f"Post {i}") for i in range(1000)]
+await Post.bulk_create(posts)
+
+# Bulk UPDATE
+for p in posts:
+    p.views = 0
+await Post.bulk_update(posts, fields=["views"])
+```
+
+---
+
+## Soft Delete / Archive
+
+```python
+from kakaorm import SoftDeleteModel, ArchiveModel
+
+class Post(SoftDeleteModel):   # adds deleted_at column
+    title = StrColumn()
+    class Meta:
+        table_name = "post"
+
+await post.delete()                            # sets deleted_at
+posts = await Post.all()                       # excludes deleted
+posts = await Post.all().include_deleted()     # includes deleted
+await post.restore()                           # clears deleted_at
+```
+
+---
+
+## Query Logging (debugging)
+
+```python
+engine.query_logging = True   # ON  — logs to kakaorm.sql at DEBUG level
+engine.query_logging = False  # OFF — default
+
+import logging
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("kakaorm.sql").setLevel(logging.DEBUG)
+# Output: kakaorm.sql | SELECT ... params=[1] (0.3ms)
+```
+
+---
+
+## Database URLs
+
+```
+sqlite+aiosqlite:///./dev.db
+sqlite+aiosqlite:///:memory:
+postgresql+asyncpg://user:password@localhost:5432/dbname
+postgresql+psycopg3://user:password@localhost:5432/dbname
+mysql+aiomysql://user:password@localhost:3306/dbname
+```
+
+---
+
+## FastAPI Integration
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+import kakaorm
+from kakaorm.migration import Migrator
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    engine = await kakaorm.connect("sqlite+aiosqlite:///dev.db")
+    await Migrator(engine).run([Author, Post])
+    yield
+    await engine.disconnect()
+
+app = FastAPI(lifespan=lifespan)
+
+@app.get("/posts")
+async def list_posts():
+    return await Post.where(Post.published == True).order_by(Post.created_at.desc)
+```
+
+---
+
+## Full Documentation
+
+- API Reference (EN): docs/REFERENCE.md
+- API Reference (JA): docs/REFERENCE.ja.md
+- FastAPI guide: docs/FASTAPI.md
+- Flask guide: docs/FLASK.md
