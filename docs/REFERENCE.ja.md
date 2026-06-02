@@ -26,6 +26,99 @@ ForeignKey(Author, on_delete="NO ACTION")  # DB デフォルト動作
 DecimalColumn(max_digits=10, decimal_places=2)  # NUMERIC(10, 2)
 ```
 
+### カラム型の選び方
+
+どの型を使うか迷ったときはこのガイドを参照してください。
+
+**数値**
+
+| 状況 | 使うべき型 |
+|---|---|
+| 整数 ID・カウント・フラグ | `IntColumn` |
+| 価格・通貨・金融計算 | `DecimalColumn` — `FloatColumn` は浮動小数点誤差が蓄積するため不可 |
+| 科学的計測・多少の丸め誤差が許容できるスコア | `FloatColumn` |
+
+```python
+# ✅ 正しい — 正確な十進演算
+price    = DecimalColumn(max_digits=10, decimal_places=2)
+tax_rate = DecimalColumn(max_digits=5,  decimal_places=4)
+
+# ❌ 誤り — 浮動小数点では 0.1 + 0.2 ≠ 0.3 になることがある
+price = FloatColumn()
+```
+
+**文字列**
+
+| 状況 | 使うべき型 |
+|---|---|
+| 長さ不定のテキスト（本文・自己紹介・メモ） | `StrColumn()` → TEXT |
+| 長さが決まっている入力（名前・スラッグ・コード） | `StrColumn(max_length=n)` → VARCHAR(n) |
+
+```python
+title   = StrColumn(max_length=200)   # VARCHAR(200) — DB レベルで長さを強制
+content = StrColumn()                  # TEXT — 長さ制限なし
+```
+
+**日付・時刻**
+
+| 状況 | 使うべき型 |
+|---|---|
+| タイムゾーン付き完全タイムスタンプ（created_at・イベント日時） | `DateTimeColumn` |
+| 日付のみ、時刻不要（誕生日・期日） | `DateColumn` |
+| 時刻のみ、日付不要（営業時間・スケジュール） | `TimeColumn` |
+
+```python
+created_at = DateTimeColumn(auto_now_add=True)  # UTC datetime
+birthday   = DateColumn(nullable=True)           # 日付のみ
+opens_at   = TimeColumn(nullable=True)           # 時刻のみ
+```
+
+**リレーション**
+
+```python
+# ✅ ForeignKey を使う — 参照整合性の強制と ON DELETE を自動処理
+author_id = ForeignKey(Author, on_delete="CASCADE")
+
+# ❌ 生の IntColumn は避ける — 制約なし、DDL のクォートも行われない
+author_id = IntColumn()
+```
+
+**nullable の使い分け**
+
+デフォルトは `nullable=True`（NULL 許可）です。値が必須のフィールドにだけ `nullable=False` を指定してください。
+
+```python
+name = StrColumn(nullable=False)   # 必須 — SQL で NOT NULL
+bio  = StrColumn(nullable=True)    # 任意 — NULL を許可
+```
+
+> KakaORM のデフォルトは Django とは逆です（Django は `blank=False` がデフォルト）。
+> Django 出身のチームは `nullable=False` の設定漏れに注意してください。
+
+---
+
+### DateTimeColumn — タイムスタンプ自動設定
+
+`auto_now_add` / `auto_now` を使うと、現在の UTC 時刻が自動で挿入されます。
+
+| オプション | 発火タイミング | 明示的な値で上書き可能？ |
+|---|---|---|
+| `auto_now_add=True` | INSERT のみ | 不可 — 常に `now()` が使われる |
+| `auto_now=True` | UPDATE のたび | 不可 — 常に `now()` が使われる |
+
+```python
+class Post(Model):
+    created_at = DateTimeColumn(auto_now_add=True, nullable=False)
+    updated_at = DateTimeColumn(auto_now=True,     nullable=True)
+```
+
+- `bulk_create()` / `bulk_update()` でも正しく動作します（v0.4.3 以降）。
+- `nullable=False` + `auto_now_add=True` の組み合わせは安全です。Migrator が `ADD COLUMN` 時に
+  DB 側デフォルト値（PostgreSQL/MySQL: `CURRENT_TIMESTAMP`、SQLite: `'1970-01-01 00:00:00'`）を
+  自動的に付与するため、既存行がエラーになりません。
+- DB に保存される値は ISO 形式の文字列です。読み出し時に `from_db()` が自動的に
+  `datetime` オブジェクトに変換します。
+
 ---
 
 ## バリデーション
@@ -1035,6 +1128,61 @@ path = await migrator.autogenerate([Log], "./migrations", name="add_log")
 
 ---
 
+## クエリログ
+
+KakaORM はすべての SQL 文を Python 標準の `logging` モジュールに出力できます。
+出力先は **`kakaorm.sql`** ロガー、レベルは `DEBUG` です。
+
+### 有効化
+
+```python
+engine = await kakaorm.connect("sqlite+aiosqlite:///dev.db")
+engine.query_logging = True   # ON
+engine.query_logging = False  # OFF（デフォルト）
+```
+
+実行中であっても任意のタイミングで切り替えられます。
+
+### ロガーの設定
+
+```python
+import logging
+
+# すべての SQL を標準出力に表示
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("kakaorm.sql").setLevel(logging.DEBUG)
+```
+
+Web アプリでは開発時のみ有効にするのが一般的です。
+
+```python
+import os, logging
+
+if os.getenv("SQL_LOG"):
+    logging.basicConfig(level=logging.DEBUG)
+    logging.getLogger("kakaorm.sql").setLevel(logging.DEBUG)
+    engine.query_logging = True
+```
+
+`SQL_LOG=1 uvicorn app:main` のように環境変数で制御できます。
+
+### 出力形式
+
+```
+kakaorm.sql | INSERT  INSERT INTO [post] ([title], [views]) VALUES (?, ?) params=['Hello', 0]  (0.3ms)
+kakaorm.sql | SELECT  SELECT COUNT(*) AS cnt FROM [post] WHERE views >= %s  params=[10]  (0.2ms)
+kakaorm.sql | UPDATE  UPDATE [post] SET views = post.views + %s  params=[1]  (0.3ms)
+kakaorm.sql | DELETE  DELETE FROM [post] WHERE [id] = ?  params=[2]  (0.1ms)
+```
+
+操作種別・完全な SQL・バインドパラメータ・経過時間（ミリ秒）が 1 行で確認できます。
+
+> INSERT / SELECT / UPDATE / DELETE / COUNT などすべての ORM 操作を捕捉します。
+> SQLite / MySQL の `bulk_create`（`executemany` 使用）はパフォーマンスのためクエリ層を
+> バイパスするため、行ごとのログは出力されません。PostgreSQL では 1 件として表示されます。
+
+---
+
 ## Raw SQL
 
 ORM で表現が難しいクエリには Raw SQL を使用できます。
@@ -1078,10 +1226,15 @@ from kakaorm.migration import Migrator
 
 migrator = Migrator(engine)
 
-# 差分プランを確認
+# ── 推奨: 1 行で完結（v0.4.2 追加）────────────────────────────
+# 差分がある場合のみ適用。スキーマが最新なら何もしない。
+await migrator.run([Author, Post])
+
+# ── 詳細版: 適用前に SQL を確認したい場合─────────────────────
 plan = await migrator.plan([Author, Post])
-print(plan.sql)       # UP SQL
-print(plan.down_sql)  # DOWN SQL（逆順）
+print(plan.sql)        # UP SQL
+print(plan.down_sql)   # DOWN SQL（逆順）
+print(plan.is_empty()) # 差分なしのとき True
 
 # 適用 / ロールバック
 await plan.apply()
@@ -1091,6 +1244,10 @@ await plan.apply_down()  # ロールバック
 plan = await migrator.plan_with_drop([Author, Post])
 await plan.apply()
 ```
+
+> **`run()` vs `plan().apply()`** — `run()` はスキーマが最新のときは何もしないため、
+> アプリ起動時に毎回呼んでも安全です。SQL を事前に確認・ログ出力したい場合や
+> ロールバックを行いたい場合は `plan()` を使ってください。
 
 ### ファイルベースのマイグレーション（推奨）
 
@@ -1170,6 +1327,93 @@ kakaorm showmigrations --db sqlite+aiosqlite:///./dev.db
 
 ---
 
+## エラーメッセージ リファレンス
+
+よくある間違いに対して、KakaORM は原因と修正方法を示すエラーを送出します。
+
+### フィールド名のタイポ
+
+```python
+User(naem="Alice")
+# TypeError: Unknown field 'naem' for User.
+#   Did you mean 'name'?
+#   Available fields: id, name, email, age
+```
+
+宣言されていないキーワード引数を渡した場合に送出されます。
+実在するフィールド名に近い場合は候補を提示します。
+
+---
+
+### ColumnMeta / WhereClause を値として渡した
+
+```python
+Post(title=Post.title)         # ColumnMeta — クラスレベルのカラムアクセサ
+Post(title=(Post.views > 0))   # WhereClause — フィルタ条件
+```
+
+```
+TypeError: Field 'title' received a ColumnMeta object.
+  ColumnMeta is used for query building, not as a field value.
+  To filter by this column: Post.where(Post.title == <value>)
+  To set a value: Post(title=<actual value>)
+
+TypeError: Field 'title' received a WhereClause object.
+  WhereClause is a filter condition, not a field value.
+  To filter rows: Post.where(<condition>)
+  To set a value: Post(title=<actual value>)
+```
+
+クラスアクセス（`Post.title`）は `ColumnMeta` を返します。これは WHERE 句の構築用であり、
+コンストラクタに渡す値ではありません。
+
+---
+
+### `update()` に WhereClause / ColumnMeta を渡した
+
+```python
+await Post.all().update(title=(Post.title == "foo"))  # WhereClause
+await Post.all().update(views=Post.views)              # ColumnMeta
+```
+
+```
+TypeError: Column 'title' in update() received a WhereClause.
+  WhereClause is a filter condition, not a SET value.
+  Use .where() to filter rows:
+    .where(<condition>).update(title=<new value>)
+
+TypeError: Column 'views' in update() received a ColumnMeta.
+  To reference another column in an expression, use arithmetic operators:
+    .update(views=views + 1)  → adds 1 to the current value
+  To set a literal value: .update(views=<actual value>)
+```
+
+現在値を参照した演算は、`ColumnMeta` の算術演算子で `UpdateExpr` を生成して渡します。
+
+```python
+# ✅ 正しい — ColumnMeta の算術演算が UpdateExpr を生成する
+await Post.all().update(views=Post.views + 1)
+await Post.all().update(price=Post.price * 0.9)
+```
+
+---
+
+### `Column()` に位置引数を渡した
+
+```python
+name = Column(str)     # TypeError
+age  = IntColumn(int)  # TypeError
+```
+
+```
+TypeError: Column() does not accept positional arguments.
+  Use a type-specific column class instead:
+  IntColumn, StrColumn, FloatColumn, BoolColumn, DateTimeColumn,
+  DateColumn, TimeColumn, DecimalColumn, ForeignKey
+```
+
+---
+
 ## セキュリティ
 
 kakaorm はクエリの値を常にバインドパラメータとして扱い、SQL インジェクションを防止します。
@@ -1177,7 +1421,7 @@ kakaorm はクエリの値を常にバインドパラメータとして扱い、
 - **WHERE / LIKE / IN 句の値** — すべてバインドパラメータ経由で送出されます
 - **`update()` のカラム名** — `_meta.columns` に存在しないキーは `ValueError` で拒否します
 - **`insert_into()` の宛先カラム名** — 同様に `_meta.columns` でホワイトリスト検証します
-- **`create()` のフィールド名** — 未知のフィールドは `TypeError` で拒否します
+- **`create()` のフィールド名** — 未知のフィールドは `TypeError` で拒否します。近いフィールド名がある場合は候補を提示します
 
 > **アプリ側の注意点**
 >
@@ -1192,6 +1436,73 @@ kakaorm はクエリの値を常にバインドパラメータとして扱い、
 >
 > また、`create()` / `save()` は既知フィールドへの書き込みを制限しません。
 > ユーザー入力から特権フィールド（`is_admin` など）を除外する処理はアプリ層で行ってください。
+
+## アップグレードガイド
+
+### v0.4.1 → v0.4.2
+
+**`Migrator().run()` — 新しい 1 行 API**
+
+以前はスキーマ変更の適用に 2 ステップが必要でした。
+
+```python
+# v0.4.1 — 引き続き動作するが冗長
+plan = await migrator.plan([User, Post])
+await plan.apply()
+```
+
+v0.4.2 から 1 行で書けるようになりました。
+
+```python
+# v0.4.2+ — 推奨
+await migrator.run([User, Post])
+```
+
+`run()` はスキーマが最新のときは何もしないため、アプリ起動時に毎回呼んでも安全です。
+`plan()` + `apply()` パターンは引き続き利用可能で、SQL を事前に確認したい場合に使えます。
+
+---
+
+**`VersionedMigrator.run()` → `run_manual()` に改名**
+
+`VersionedMigrator.run(dict)` を使っていた場合は `run_manual(dict)` に変更してください。
+継承した `run()` はモデルリストを受け取る新しい API です。
+
+```python
+# v0.4.1
+await versioned_migrator.run({"up": [...], "down": [...]})
+
+# v0.4.2+
+await versioned_migrator.run_manual({"up": [...], "down": [...]})
+```
+
+---
+
+### v0.4.2 → v0.4.3
+
+**`DateTimeColumn(auto_now_add=True)` がバルク操作でも動作するように**
+
+v0.4.3 以前は `auto_now_add` / `auto_now` が `save()` でのみ発火し、バルク操作では無視されていました。
+
+```python
+# v0.4.2 — auto_now_add が適用されなかった
+await Post.bulk_create([Post(title="A"), Post(title="B")])
+
+# v0.4.3+ — bulk_create / bulk_update でも正しく発火する
+await Post.bulk_create([Post(title="A"), Post(title="B")])
+```
+
+コードの変更は不要です。以前に挿入されたタイムスタンプ欠落行は `NULL` / 空値のまま残ります。
+
+---
+
+**`nullable=False` + `auto_now_add=True` の ADD COLUMN**
+
+v0.4.3 以前は、既存テーブルに `NOT NULL` かつ `auto_now_add=True` のカラムを追加すると
+既存行の制約違反でマイグレーションが失敗していました。
+v0.4.3 以降は Migrator が自動的に DB 側デフォルト値を注入するため、手動での回避策は不要です。
+
+---
 
 ## テーブル名と予約語
 

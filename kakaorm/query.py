@@ -18,7 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Generic, Type, TypeVar
 
-from kakaorm.columns.base import AggFunc, Avg, Case, ColumnCompare, Max, Min, Sum, UpdateExpr, WhereClause
+from kakaorm.columns.base import AggFunc, Avg, Case, ColumnCompare, ColumnMeta, Max, Min, Sum, UpdateExpr, WhereClause
 
 if TYPE_CHECKING:
     from kakaorm.model import Model
@@ -605,6 +605,20 @@ class QuerySet(Generic[T]):
         set_parts: list[str] = []
         params: list[Any] = []
         for k, v in values.items():
+            if isinstance(v, WhereClause):
+                raise TypeError(
+                    f"Column {k!r} in update() received a WhereClause.\n"
+                    f"  WhereClause is a filter condition, not a SET value.\n"
+                    f"  Use .where() to filter rows:\n"
+                    f"    .where(<condition>).update({k}=<new value>)"
+                )
+            if isinstance(v, ColumnMeta):
+                raise TypeError(
+                    f"Column {k!r} in update() received a ColumnMeta.\n"
+                    f"  To reference another column in an expression, use arithmetic operators:\n"
+                    f"    .update({k}={v._name} + 1)  → adds 1 to the current value\n"
+                    f"  To set a literal value: .update({k}=<actual value>)"
+                )
             if isinstance(v, UpdateExpr):
                 set_parts.append(f"{k} = {v.sql}")
                 params.extend(v.params)

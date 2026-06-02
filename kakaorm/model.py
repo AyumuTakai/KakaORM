@@ -15,6 +15,7 @@ Pydantic v2 プロトコル (__get_pydantic_core_schema__ / __get_pydantic_json_
 
 from __future__ import annotations
 
+import difflib
 from typing import TYPE_CHECKING, Any, ClassVar, Type, TypeVar
 
 if TYPE_CHECKING:
@@ -163,13 +164,32 @@ class Model(metaclass=AsyncORMMeta):
     _engine: ClassVar[Any] = None  # Engine インスタンス (connect() で設定)
 
     def __init__(self, **kwargs: Any) -> None:
-        # カラム定義にないキーを拒否
+        fields = list(self._meta.columns.keys())
         for key in kwargs:
             if key not in self._meta.columns:
-                raise TypeError(f"Unknown field: {key!r} for model {type(self).__name__}")
+                msg = f"Unknown field {key!r} for {type(self).__name__}."
+                matches = difflib.get_close_matches(key, fields, n=1, cutoff=0.6)
+                if matches:
+                    msg += f"\n  Did you mean {matches[0]!r}?"
+                msg += f"\n  Available fields: {', '.join(fields)}"
+                raise TypeError(msg)
         self._data: dict[str, Any] = {}
         for col_name, col in self._meta.columns.items():
             val = kwargs.get(col_name, col.default)
+            if isinstance(val, ColumnMeta):
+                raise TypeError(
+                    f"Field {col_name!r} received a ColumnMeta object.\n"
+                    f"  ColumnMeta is used for query building, not as a field value.\n"
+                    f"  To filter by this column: {type(self).__name__}.where({type(self).__name__}.{col_name} == <value>)\n"
+                    f"  To set a value: {type(self).__name__}({col_name}=<actual value>)"
+                )
+            if isinstance(val, WhereClause):
+                raise TypeError(
+                    f"Field {col_name!r} received a WhereClause object.\n"
+                    f"  WhereClause is a filter condition, not a field value.\n"
+                    f"  To filter rows: {type(self).__name__}.where(<condition>)\n"
+                    f"  To set a value: {type(self).__name__}({col_name}=<actual value>)"
+                )
             self._data[col_name] = val
         # DB から取得したインスタンスは False、新規生成は True
         self._is_new: bool = True

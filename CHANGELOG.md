@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-06-02
+
+### Added
+
+- **Query logging** — `engine.query_logging = True/False` toggles SQL output at any time.
+  All statements are emitted to the `kakaorm.sql` logger at `DEBUG` level with operation
+  type, full SQL, bound parameters, and elapsed time in milliseconds.
+- **Column type selection guide** — new section in `docs/REFERENCE.md` / `REFERENCE.ja.md`
+  covering which column class to choose (numbers, strings, dates, nullable defaults).
+- **Aggregation examples in README** — `aggregate()`, `count()`, `sum()`, `group_by().having()`
+  now shown in the CRUD section of `README.md` / `README.ja.md` with a link to REFERENCE.
+- **Error message reference** — new section in REFERENCE documenting all descriptive errors
+  with fix hints.
+- **Upgrade guide** — v0.4.1 → v0.4.2 → v0.4.3 migration notes added to REFERENCE.
+
+### Changed
+
+- **`Migrator.run()` promoted** in REFERENCE migration section — now shown as the recommended
+  one-liner; `plan().apply()` remains documented as the verbose alternative.
+- **`DateTimeColumn` docs expanded** — firing timing, `nullable=False` + `auto_now_add`
+  behavior, and DB storage format now explicitly documented.
+
+### Fixed
+
+- **`Column()` with positional argument** — raises `TypeError` with a list of type-specific
+  classes (`IntColumn`, `StrColumn`, …) instead of the cryptic Python default message.
+  Applies to all subclasses (`IntColumn`, `StrColumn`, `DateTimeColumn`, …).
+- **`Model.__init__` typo suggestion** — unknown field names now show a `Did you mean?`
+  hint via `difflib` plus the full list of available fields.
+- **`ColumnMeta` / `WhereClause` passed as field value** — `Model.__init__` and
+  `QuerySet.update()` now raise `TypeError` with actionable guidance instead of silently
+  storing the wrong object.
+
 ## [0.4.4] - 2026-06-02
 
 ### Added

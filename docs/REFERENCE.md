@@ -26,6 +26,100 @@ ForeignKey(Author, on_delete="NO ACTION")  # database default behavior
 DecimalColumn(max_digits=10, decimal_places=2)  # NUMERIC(10, 2)
 ```
 
+### Choosing the Right Column Type
+
+Use this guide when you are unsure which column class fits your data.
+
+**Numbers**
+
+| Situation | Use |
+|---|---|
+| Integer IDs, counts, flags | `IntColumn` |
+| Prices, currency, financial calculations | `DecimalColumn` — never `FloatColumn` (floating-point rounding errors accumulate) |
+| Scientific measurements, scores where small rounding is acceptable | `FloatColumn` |
+
+```python
+# ✅ Correct — exact decimal arithmetic
+price    = DecimalColumn(max_digits=10, decimal_places=2)
+tax_rate = DecimalColumn(max_digits=5,  decimal_places=4)
+
+# ❌ Wrong — 0.1 + 0.2 ≠ 0.3 in floating point
+price = FloatColumn()
+```
+
+**Strings**
+
+| Situation | Use |
+|---|---|
+| Unbounded text (body, bio, notes) | `StrColumn()` → TEXT |
+| Bounded input (name, slug, code) | `StrColumn(max_length=n)` → VARCHAR(n) |
+| Short fixed-length codes | `StrColumn(max_length=n, check="char_length(value) = n")` |
+
+```python
+title   = StrColumn(max_length=200)   # VARCHAR(200) + enforces length at DB level
+content = StrColumn()                  # TEXT — no length limit
+```
+
+**Dates and Times**
+
+| Situation | Use |
+|---|---|
+| Full timestamp with timezone (created_at, updated_at, event time) | `DateTimeColumn` |
+| Calendar date only, no time (birthday, due date) | `DateColumn` |
+| Time of day only, no date (business hours, schedule) | `TimeColumn` |
+
+```python
+created_at = DateTimeColumn(auto_now_add=True)  # UTC datetime
+birthday   = DateColumn(nullable=True)           # date only
+opens_at   = TimeColumn(nullable=True)           # time only
+```
+
+**Relations**
+
+```python
+# ✅ Use ForeignKey — enforces referential integrity and handles ON DELETE
+author_id = ForeignKey(Author, on_delete="CASCADE")
+
+# ❌ Avoid raw IntColumn for FK — no constraint, no auto-quoting in DDL
+author_id = IntColumn()
+```
+
+**Nullable vs. Non-nullable**
+
+`nullable=True` is the default. Flip it to `False` only for fields that must always have a value:
+
+```python
+name  = StrColumn(nullable=False)   # required — NOT NULL in SQL
+bio   = StrColumn(nullable=True)    # optional — allows NULL
+```
+
+> KakaORM defaults differ from Django (where `blank=False` is the default).
+> If your team comes from Django, be deliberate about setting `nullable=False`.
+
+---
+
+### DateTimeColumn — Automatic Timestamps
+
+`auto_now_add` and `auto_now` inject the current UTC time automatically so you never pass timestamps manually.
+
+| Option | Fires on | Explicit value overrides? |
+|---|---|---|
+| `auto_now_add=True` | INSERT only | No — always uses `now()` |
+| `auto_now=True` | every UPDATE | No — always uses `now()` |
+
+```python
+class Post(Model):
+    created_at = DateTimeColumn(auto_now_add=True, nullable=False)
+    updated_at = DateTimeColumn(auto_now=True,     nullable=True)
+```
+
+- Both options work with `bulk_create()` and `bulk_update()`.
+- `nullable=False` with `auto_now_add=True` is safe: Migrator injects a DB-side default
+  (`CURRENT_TIMESTAMP` on PostgreSQL/MySQL, `'1970-01-01 00:00:00'` on SQLite) for
+  `ADD COLUMN` migrations so existing rows are not rejected.
+- Values stored in the DB are ISO-format strings; `from_db()` parses them back to
+  `datetime` objects automatically.
+
 ---
 
 ## Validation
@@ -1037,6 +1131,61 @@ path = await migrator.autogenerate([Log], "./migrations", name="add_log")
 
 ---
 
+## Query Logging
+
+KakaORM can print every SQL statement to Python's standard `logging` system.
+All output goes to the **`kakaorm.sql`** logger at `DEBUG` level.
+
+### Enabling
+
+```python
+engine = await kakaorm.connect("sqlite+aiosqlite:///dev.db")
+engine.query_logging = True   # ON
+engine.query_logging = False  # OFF (default)
+```
+
+You can toggle it at any time — even mid-request.
+
+### Configuring the logger
+
+```python
+import logging
+
+# Print all SQL to stdout
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("kakaorm.sql").setLevel(logging.DEBUG)
+```
+
+For a typical web app you usually only want SQL logs in development:
+
+```python
+import os, logging
+
+if os.getenv("SQL_LOG"):
+    logging.basicConfig(level=logging.DEBUG)
+    logging.getLogger("kakaorm.sql").setLevel(logging.DEBUG)
+    engine.query_logging = True
+```
+
+Then run with `SQL_LOG=1 uvicorn app:main` to enable.
+
+### Output format
+
+```
+kakaorm.sql | INSERT  INSERT INTO [post] ([title], [views]) VALUES (?, ?) params=['Hello', 0]  (0.3ms)
+kakaorm.sql | SELECT  SELECT COUNT(*) AS cnt FROM [post] WHERE views >= %s  params=[10]  (0.2ms)
+kakaorm.sql | UPDATE  UPDATE [post] SET views = post.views + %s  params=[1]  (0.3ms)
+kakaorm.sql | DELETE  DELETE FROM [post] WHERE [id] = ?  params=[2]  (0.1ms)
+```
+
+Each line includes the operation type, full SQL, bound parameters, and elapsed time in milliseconds.
+
+> All ORM operations (INSERT, SELECT, UPDATE, DELETE, COUNT, bulk operations) are captured.
+> `bulk_create` with `executemany` is not logged per-row on SQLite/MySQL (it bypasses the
+> query layer for performance), but will appear as a single statement on PostgreSQL.
+
+---
+
 ## Raw SQL
 
 Use raw SQL for queries that are hard to express with the ORM.
@@ -1080,10 +1229,15 @@ from kakaorm.migration import Migrator
 
 migrator = Migrator(engine)
 
-# Preview the migration plan
+# ── Recommended: one-liner (added in v0.4.2) ──────────────────
+# Computes the diff and applies it only when there is something to change.
+await migrator.run([Author, Post])
+
+# ── Verbose form: inspect before applying ─────────────────────
 plan = await migrator.plan([Author, Post])
 print(plan.sql)       # UP SQL
 print(plan.down_sql)  # DOWN SQL (reverse order)
+print(plan.is_empty()) # True when schema is already up to date
 
 # Apply / rollback
 await plan.apply()
@@ -1093,6 +1247,10 @@ await plan.apply_down()  # rollback
 plan = await migrator.plan_with_drop([Author, Post])
 await plan.apply()
 ```
+
+> **`run()` vs `plan().apply()`** — `run()` is a no-op when the schema is already in
+> sync, making it safe to call on every startup. Use `plan()` when you need to inspect
+> or log the SQL before committing, or when you want to apply rollbacks.
 
 ### File-based Migrations (recommended)
 
@@ -1172,6 +1330,93 @@ kakaorm showmigrations --db sqlite+aiosqlite:///./dev.db
 
 ---
 
+## Error Message Reference
+
+KakaORM raises descriptive errors for the most common mistakes. This section documents what each error means and how to fix it.
+
+### Unknown field name (typo)
+
+```python
+User(naem="Alice")
+# TypeError: Unknown field 'naem' for User.
+#   Did you mean 'name'?
+#   Available fields: id, name, email, age
+```
+
+Triggered when a keyword argument does not match any declared column. When the typo is
+close to a real field name, a suggestion is shown.
+
+---
+
+### ColumnMeta passed as a value
+
+```python
+Post(title=Post.title)         # ColumnMeta — class-level column accessor
+Post(title=(Post.views > 0))   # WhereClause — filter condition
+```
+
+```
+TypeError: Field 'title' received a ColumnMeta object.
+  ColumnMeta is used for query building, not as a field value.
+  To filter by this column: Post.where(Post.title == <value>)
+  To set a value: Post(title=<actual value>)
+
+TypeError: Field 'title' received a WhereClause object.
+  WhereClause is a filter condition, not a field value.
+  To filter rows: Post.where(<condition>)
+  To set a value: Post(title=<actual value>)
+```
+
+`Post.title` (accessed on the class) returns a `ColumnMeta` used for building WHERE
+conditions. Passing it as a constructor argument is always a mistake.
+
+---
+
+### WhereClause or ColumnMeta passed to `update()`
+
+```python
+await Post.all().update(title=(Post.title == "foo"))  # WhereClause
+await Post.all().update(views=Post.views)              # ColumnMeta
+```
+
+```
+TypeError: Column 'title' in update() received a WhereClause.
+  WhereClause is a filter condition, not a SET value.
+  Use .where() to filter rows:
+    .where(<condition>).update(title=<new value>)
+
+TypeError: Column 'views' in update() received a ColumnMeta.
+  To reference another column in an expression, use arithmetic operators:
+    .update(views=views + 1)  → adds 1 to the current value
+  To set a literal value: .update(views=<actual value>)
+```
+
+To increment or compute from the current column value, use arithmetic on the column:
+
+```python
+# ✅ Correct — arithmetic on ColumnMeta produces UpdateExpr
+await Post.all().update(views=Post.views + 1)
+await Post.all().update(price=Post.price * 0.9)
+```
+
+---
+
+### Column() called with positional argument
+
+```python
+name = Column(str)     # TypeError
+age  = IntColumn(int)  # TypeError
+```
+
+```
+TypeError: Column() does not accept positional arguments.
+  Use a type-specific column class instead:
+  IntColumn, StrColumn, FloatColumn, BoolColumn, DateTimeColumn,
+  DateColumn, TimeColumn, DecimalColumn, ForeignKey
+```
+
+---
+
 ## Security
 
 KakaORM always treats query values as bind parameters to prevent SQL injection.
@@ -1179,7 +1424,7 @@ KakaORM always treats query values as bind parameters to prevent SQL injection.
 - **Values in WHERE / LIKE / IN clauses** — always sent via bind parameters
 - **Column names in `update()`** — keys not present in `_meta.columns` are rejected with `ValueError`
 - **Destination column names in `insert_into()`** — similarly whitelist-validated against `_meta.columns`
-- **Field names in `create()`** — unknown fields are rejected with `TypeError`
+- **Field names in `create()`** — unknown fields are rejected with `TypeError`; a typo suggestion is shown when a close match exists
 
 > **Application-level notes**
 >
@@ -1194,6 +1439,76 @@ KakaORM always treats query values as bind parameters to prevent SQL injection.
 >
 > Also note that `create()` / `save()` do not restrict writes to privileged fields (e.g. `is_admin`).
 > Exclude such fields from user input at the application layer.
+
+## Upgrade Guide
+
+### v0.4.1 → v0.4.2
+
+**`Migrator().run()` (new convenience method)**
+
+Previously, applying schema changes required two separate calls:
+
+```python
+# v0.4.1 — still works, but verbose
+plan = await migrator.plan([User, Post])
+await plan.apply()
+```
+
+In v0.4.2 a one-liner was added:
+
+```python
+# v0.4.2+ — recommended
+await migrator.run([User, Post])
+```
+
+`run()` is a no-op when the schema is already up to date, so it is safe to call on every
+application startup. The old `plan()` + `apply()` pattern continues to work and is still
+useful when you need to inspect the SQL before applying it.
+
+---
+
+**`VersionedMigrator.run()` renamed to `run_manual()`**
+
+If you were calling `VersionedMigrator.run(dict)`, rename it to `run_manual(dict)`.
+The new `run()` inherited from `Migrator` takes a model list, not a dict.
+
+```python
+# v0.4.1
+await versioned_migrator.run({"up": [...], "down": [...]})
+
+# v0.4.2+
+await versioned_migrator.run_manual({"up": [...], "down": [...]})
+```
+
+---
+
+### v0.4.2 → v0.4.3
+
+**`DateTimeColumn(auto_now_add=True)` now works in all operations**
+
+Before v0.4.3, `auto_now_add` / `auto_now` were applied only in `save()`. Bulk
+operations silently ignored the hooks.
+
+```python
+# v0.4.2 — auto_now_add was NOT applied here
+await Post.bulk_create([Post(title="A"), Post(title="B")])
+
+# v0.4.3+ — hooks fire correctly in bulk_create / bulk_update
+await Post.bulk_create([Post(title="A"), Post(title="B")])
+```
+
+No code changes are required. Previously inserted rows that are missing the timestamp
+will retain their `NULL` / empty value.
+
+---
+
+**`nullable=False` + `auto_now_add=True` on ADD COLUMN**
+
+Before v0.4.3, adding a `NOT NULL` `auto_now_add` column to an existing table would fail
+because the Migrator did not inject a default for existing rows. This is now handled
+automatically — no manual migration workaround is needed.
+
+---
 
 ## Table Naming — Reserved Words
 

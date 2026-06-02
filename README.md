@@ -156,6 +156,8 @@ class Product(Model):
 
 For column options (`nullable`, `default`, `unique`, `primary_key`, `index`, `check`, `auto_increment`, `auto_now`, `on_delete`, etc.) see the full reference below.
 
+> **Not sure which type to use?** See the [Column Type Selection Guide](https://github.com/AyumuTakai/KakaORM/blob/main/docs/REFERENCE.md#choosing-the-right-column-type) — covers numbers (`FloatColumn` vs `DecimalColumn`), strings, dates, and nullable defaults.
+
 → Full API reference: [docs/REFERENCE.md](https://github.com/AyumuTakai/KakaORM/blob/main/docs/REFERENCE.md)
 
 ## CRUD
@@ -190,6 +192,40 @@ last  = await Author.last()
 author = await Author.get(Author.id == 1)
 data = author.to_dict()         # {"id": 1, "name": "Alice", "email": "..."}
 ```
+
+### Aggregation
+
+```python
+from kakaorm import Count, Sum, Avg, Max, Min
+
+# Single-value shortcuts
+n     = await Post.all().count()
+n     = await Post.where(Post.published == True).count()
+total = await Post.all().sum(Post.views)
+avg   = await Post.all().avg(Post.score)
+hi    = await Post.all().max(Post.views)
+lo    = await Post.all().min(Post.score)
+found = await Post.where(Post.published == False).exists()  # bool
+
+# Multiple aggregates in one query
+stats = await Post.where(Post.published == True).aggregate(
+    total_views   = Sum(Post.views),
+    avg_score     = Avg(Post.score),
+    published_cnt = Count(Post.id),
+)
+# {"total_views": 12500, "avg_score": 3.8, "published_cnt": 42}
+
+# Group by author, filter with HAVING
+rows = await (
+    Post.all()
+        .select(Post.author_id, Count(Post.id).label("cnt"), Sum(Post.views).label("views"))
+        .group_by(Post.author_id)
+        .having(Count(Post.id) >= 2)
+        .order_by(Sum(Post.views).desc)
+)
+```
+
+→ Window functions, CTEs, and more: [docs/REFERENCE.md — Aggregate Functions](https://github.com/AyumuTakai/KakaORM/blob/main/docs/REFERENCE.md#aggregate-functions)
 
 ### Update
 

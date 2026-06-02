@@ -19,11 +19,15 @@ asyncpg / psycopg3 / aiosqlite / aiomysql のどれを使っても同じ API で
 from __future__ import annotations
 
 import contextvars
+import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
+
+_sql_logger = logging.getLogger("kakaorm.sql")
 
 # ── トランザクション用 ContextVar ─────────────────────────────
 # asyncio タスクごとに独立した値を持つため、並列リクエストが干渉しない。
@@ -46,6 +50,10 @@ class Engine(ABC):
     SQL 文字列と bind パラメータを受け取り、実行する。
     """
 
+    #: True にするとすべての SQL を kakaorm.sql ロガーに DEBUG レベルで出力する。
+    #: ``engine.query_logging = True`` で有効化、``False`` で無効化できる。
+    query_logging: bool = False
+
     @abstractmethod
     async def connect(self) -> None:
         """コネクション (プール) を初期化する。"""
@@ -55,16 +63,46 @@ class Engine(ABC):
         """コネクション (プール) を閉じる。"""
 
     @abstractmethod
+    async def _raw_fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+        """SELECT 結果を dict のリストで返す（ログなし低レベル実装）。"""
+
+    @abstractmethod
+    async def _raw_execute(self, sql: str, params: list[Any]) -> int:
+        """INSERT/UPDATE/DELETE を実行し影響行数を返す（ログなし低レベル実装）。"""
+
+    @abstractmethod
+    async def _raw_fetchval(self, sql: str, params: list[Any]) -> Any:
+        """スカラー値を 1 つ返す（ログなし低レベル実装）。"""
+
+    # ── ログ付きラッパー（全クエリの唯一の通過点）────────────
+
     async def _fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
-        """SELECT 結果を dict のリストで返す。"""
+        if not self.query_logging:
+            return await self._raw_fetch(sql, params)
+        t = time.perf_counter()
+        result = await self._raw_fetch(sql, params)
+        ms = (time.perf_counter() - t) * 1000
+        _sql_logger.debug("SELECT  %s  params=%r  (%.1fms)", sql, params, ms)
+        return result
 
-    @abstractmethod
     async def _execute(self, sql: str, params: list[Any]) -> int:
-        """INSERT/UPDATE/DELETE を実行し影響行数を返す。"""
+        if not self.query_logging:
+            return await self._raw_execute(sql, params)
+        t = time.perf_counter()
+        result = await self._raw_execute(sql, params)
+        ms = (time.perf_counter() - t) * 1000
+        op = sql.split()[0].upper() if sql else "SQL"
+        _sql_logger.debug("%s  %s  params=%r  (%.1fms)", op, sql, params, ms)
+        return result
 
-    @abstractmethod
     async def _fetchval(self, sql: str, params: list[Any]) -> Any:
-        """スカラー値を 1 つ返す (COUNT など)。"""
+        if not self.query_logging:
+            return await self._raw_fetchval(sql, params)
+        t = time.perf_counter()
+        result = await self._raw_fetchval(sql, params)
+        ms = (time.perf_counter() - t) * 1000
+        _sql_logger.debug("INSERT  %s  params=%r  (%.1fms)", sql, params, ms)
+        return result
 
     @asynccontextmanager
     async def transaction(self):
@@ -459,7 +497,7 @@ class AsyncpgEngine(Engine):
         if self._pool:
             await self._pool.close()
 
-    async def _fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+    async def _raw_fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
         conn = _tx_conn.get()
         if conn:
             rows = await conn.fetch(sql, *params)
@@ -468,7 +506,7 @@ class AsyncpgEngine(Engine):
             rows = await conn.fetch(sql, *params)
             return [dict(r) for r in rows]
 
-    async def _execute(self, sql: str, params: list[Any]) -> int:
+    async def _raw_execute(self, sql: str, params: list[Any]) -> int:
         conn = _tx_conn.get()
         if conn:
             result = await conn.execute(sql, *params)
@@ -479,7 +517,7 @@ class AsyncpgEngine(Engine):
             match = re.search(r"\d+$", result)
             return int(match.group()) if match else 0
 
-    async def _fetchval(self, sql: str, params: list[Any]) -> Any:
+    async def _raw_fetchval(self, sql: str, params: list[Any]) -> Any:
         conn = _tx_conn.get()
         if conn:
             return await conn.fetchval(sql, *params)
@@ -603,14 +641,14 @@ class AioSQLiteEngine(Engine):
         if self._conn:
             await self._conn.close()
 
-    async def _fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+    async def _raw_fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
         sql = self._normalize_sql(sql)
         async with self._conn.execute(sql, params) as cursor:
             rows = await cursor.fetchall()
             cols = [d[0] for d in cursor.description] if cursor.description else []
             return [dict(zip(cols, row)) for row in rows]
 
-    async def _execute(self, sql: str, params: list[Any]) -> int:
+    async def _raw_execute(self, sql: str, params: list[Any]) -> int:
         sql = self._normalize_sql(sql)
         sql_exec = re.sub(r"\s+RETURNING\s+\w+", "", sql, flags=re.IGNORECASE)
         async with self._conn.execute(sql_exec, params) as cursor:
@@ -618,7 +656,7 @@ class AioSQLiteEngine(Engine):
                 await self._conn.commit()
             return cursor.rowcount if cursor.rowcount >= 0 else 0
 
-    async def _fetchval(self, sql: str, params: list[Any]) -> Any:
+    async def _raw_fetchval(self, sql: str, params: list[Any]) -> Any:
         """INSERT RETURNING id を SQLite の lastrowid で代替。"""
         sql_exec = self._normalize_sql(sql)
         has_returning = "RETURNING" in sql.upper()
@@ -827,7 +865,7 @@ class AioMySQLEngine(Engine):
             self._pool.close()
             await self._pool.wait_closed()
 
-    async def _fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+    async def _raw_fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
         import aiomysql  # type: ignore
         conn = _tx_conn.get()
         if conn:
@@ -885,7 +923,7 @@ class AioMySQLEngine(Engine):
         else:
             await self._execute(sql, values)
 
-    async def _execute(self, sql: str, params: list[Any]) -> int:
+    async def _raw_execute(self, sql: str, params: list[Any]) -> int:
         conn = _tx_conn.get()
         if conn:
             async with conn.cursor() as cur:
@@ -896,7 +934,7 @@ class AioMySQLEngine(Engine):
                 await cur.execute(sql, params)
                 return cur.rowcount if cur.rowcount >= 0 else 0
 
-    async def _fetchval(self, sql: str, params: list[Any]) -> Any:
+    async def _raw_fetchval(self, sql: str, params: list[Any]) -> Any:
         """INSERT RETURNING id を MySQL の lastrowid で代替。"""
         has_returning = "RETURNING" in sql.upper()
         sql_exec = re.sub(r"\s+RETURNING\s+\w+", "", sql, flags=re.IGNORECASE)
@@ -969,7 +1007,7 @@ class Psycopg3Engine(Engine):
         if self._pool:
             await self._pool.close()
 
-    async def _fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
+    async def _raw_fetch(self, sql: str, params: list[Any]) -> list[dict[str, Any]]:
         conn = _tx_conn.get()
         if conn:
             async with conn.cursor() as cur:
@@ -984,7 +1022,7 @@ class Psycopg3Engine(Engine):
                 cols = [d.name for d in cur.description] if cur.description else []
                 return [dict(zip(cols, row)) for row in rows]
 
-    async def _execute(self, sql: str, params: list[Any]) -> int:
+    async def _raw_execute(self, sql: str, params: list[Any]) -> int:
         conn = _tx_conn.get()
         if conn:
             async with conn.cursor() as cur:
@@ -995,7 +1033,7 @@ class Psycopg3Engine(Engine):
                 await cur.execute(sql, params)
                 return cur.rowcount
 
-    async def _fetchval(self, sql: str, params: list[Any]) -> Any:
+    async def _raw_fetchval(self, sql: str, params: list[Any]) -> Any:
         conn = _tx_conn.get()
         if conn:
             async with conn.cursor() as cur:

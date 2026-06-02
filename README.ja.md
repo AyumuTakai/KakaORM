@@ -156,6 +156,8 @@ class Product(Model):
 
 カラムオプション（`nullable`、`default`、`unique`、`primary_key`、`index`、`check`、`auto_increment`、`auto_now`、`on_delete` など）の詳細はリファレンスを参照してください。
 
+> **どの型を使うか迷ったら？** [カラム型の選び方](https://github.com/AyumuTakai/KakaORM/blob/main/docs/REFERENCE.ja.md#カラム型の選び方) を参照してください。数値（`FloatColumn` vs `DecimalColumn`）・文字列・日付・nullable のデフォルトについて解説しています。
+
 → 完全な API リファレンス: [docs/REFERENCE.ja.md](https://github.com/AyumuTakai/KakaORM/blob/main/docs/REFERENCE.ja.md)
 
 ## CRUD
@@ -190,6 +192,40 @@ last  = await Author.last()
 author = await Author.get(Author.id == 1)
 data = author.to_dict()         # {"id": 1, "name": "Alice", "email": "..."}
 ```
+
+### 集計
+
+```python
+from kakaorm import Count, Sum, Avg, Max, Min
+
+# 単一値ショートカット
+n     = await Post.all().count()
+n     = await Post.where(Post.published == True).count()
+total = await Post.all().sum(Post.views)
+avg   = await Post.all().avg(Post.score)
+hi    = await Post.all().max(Post.views)
+lo    = await Post.all().min(Post.score)
+found = await Post.where(Post.published == False).exists()  # bool
+
+# 複数集計を 1 クエリで取得
+stats = await Post.where(Post.published == True).aggregate(
+    total_views   = Sum(Post.views),
+    avg_score     = Avg(Post.score),
+    published_cnt = Count(Post.id),
+)
+# {"total_views": 12500, "avg_score": 3.8, "published_cnt": 42}
+
+# 著者ごとにグループ化し HAVING でフィルタ
+rows = await (
+    Post.all()
+        .select(Post.author_id, Count(Post.id).label("cnt"), Sum(Post.views).label("views"))
+        .group_by(Post.author_id)
+        .having(Count(Post.id) >= 2)
+        .order_by(Sum(Post.views).desc)
+)
+```
+
+→ ウィンドウ関数・CTE など: [docs/REFERENCE.ja.md — 集計関数](https://github.com/AyumuTakai/KakaORM/blob/main/docs/REFERENCE.ja.md#集計関数)
 
 ### 更新
 

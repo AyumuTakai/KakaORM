@@ -17,8 +17,8 @@ from kakaorm.columns.base import Column
 class IntColumn(Column[int]):
     sql_type = "INTEGER"
 
-    def __init__(self, *, auto_increment: bool = False, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, *args: Any, auto_increment: bool = False, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
         self.auto_increment = auto_increment
 
     def ddl_fragment(self, quote_fn=None) -> str:
@@ -31,8 +31,8 @@ class IntColumn(Column[int]):
 class StrColumn(Column[str]):
     sql_type = "TEXT"
 
-    def __init__(self, *, max_length: int | None = None, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, *args: Any, max_length: int | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
         self.max_length = max_length
         if max_length:
             self.sql_type = f"VARCHAR({max_length})"
@@ -49,8 +49,8 @@ class BoolColumn(Column[bool]):
 class DateTimeColumn(Column[_datetime]):
     sql_type = "TIMESTAMP WITH TIME ZONE"
 
-    def __init__(self, *, auto_now: bool = False, auto_now_add: bool = False, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    def __init__(self, *args: Any, auto_now: bool = False, auto_now_add: bool = False, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
         self.auto_now = auto_now
         self.auto_now_add = auto_now_add
 

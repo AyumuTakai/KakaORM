@@ -563,7 +563,7 @@ class Column(Generic[T]):
 
     def __init__(
         self,
-        *,
+        *args: Any,
         primary_key: bool = False,
         nullable: bool = True,
         default: Any = None,
@@ -572,6 +572,13 @@ class Column(Generic[T]):
         check: str | None = None,
         validators: "list | None" = None,
     ) -> None:
+        if args:
+            raise TypeError(
+                f"{self.__class__.__name__}() does not accept positional arguments. "
+                "Use a type-specific column class instead: "
+                "IntColumn, StrColumn, FloatColumn, BoolColumn, DateTimeColumn, "
+                "DateColumn, TimeColumn, DecimalColumn, ForeignKey"
+            )
         self.primary_key = primary_key
         self.nullable = nullable
         self.default = default
