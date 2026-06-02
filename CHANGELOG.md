@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-06-02
+
+### Added
+
+- **`llms.txt`** — condensed cheat-sheet for LLMs and AI coding assistants following the
+  llmstxt.org convention. Covers setup, column type selection, anti-patterns, CRUD,
+  querying, aggregation, relations, migrations, transactions, and debugging tips.
+  Referenced from README.md / README.ja.md.
+- **`CLAUDE.md`** — Claude Code project guide for contributors. Documents repository
+  structure, the `_raw_*` engine pattern, version-bump checklist (5 files to update),
+  bilingual doc rule, commit convention, and remaining TODO items.
+
 ## [0.4.5] - 2026-06-02
 
 ### Added

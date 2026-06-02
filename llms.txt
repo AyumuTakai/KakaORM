@@ -1,7 +1,7 @@
 # KakaORM
 
 > Async-native ORM for PostgreSQL, SQLite, and MySQL/MariaDB.
-> Version: 0.4.5 | Python 3.11+ | asyncio only
+> Version: 0.4.6 | Python 3.11+ | asyncio only
 
 ---
 
