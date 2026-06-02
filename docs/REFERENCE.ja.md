@@ -143,22 +143,73 @@ class User(Model):
 
 ### エラーの捕捉
 
-`ValidationError.errors` はフィールド名をキーにしたエラーメッセージリストの辞書です:
+`ValidationError` は同じ失敗を 2 つの形式で参照できます:
+
+| 属性 | 型 | 用途 |
+|---|---|---|
+| `e.errors` | `dict[str, list[str]]` | 後方互換のフィールド → メッセージ辞書 |
+| `e.detail` | `list[dict]` | 構造化エントリ（失敗 1 件につき 1 要素） |
 
 ```python
 user = User(name="A", age=-5, email="bad")
 try:
     await user.save()
 except ValidationError as e:
+    # ── 従来形式（後方互換） ───────────────────────────────────
     print(e.errors)
     # {
     #   "name":  ["2 文字以上で入力してください。"],
     #   "age":   ["0 以上の値を入力してください。"],
     #   "email": ["有効なメールアドレスを入力してください。"],
     # }
+
+    # ── 構造化形式 ────────────────────────────────────────────
+    for issue in e.detail:
+        print(issue)
+    # {"status": "validation_error", "field": "name",  "rule": "min_length",
+    #  "message": "2 文字以上で入力してください。", "received": "A", "expected_min": 2}
+    # {"status": "validation_error", "field": "age",   "rule": "min_value",
+    #  "message": "0 以上の値を入力してください。", "received": -5, "expected_min": 0}
+    # {"status": "validation_error", "field": "email", "rule": "regex",
+    #  "message": "...", "received": "bad", "pattern": "^[^@]+@[^@]+\\.[^@]+$"}
 ```
 
 全フィールドのエラーを一度に収集するため、1 回の例外で全ての問題が分かります。
+
+#### 構造化エントリのキー一覧
+
+`e.detail` の各要素には以下のキーが必ず含まれます:
+
+| キー | 値 |
+|---|---|
+| `status` | 常に `"validation_error"` |
+| `field` | カラム名（例: `"name"`） |
+| `rule` | バリデータ名または `"custom"` |
+| `message` | 人間が読めるエラーメッセージ |
+| `received` | バリデーションに失敗した実際の値 |
+
+組み込みバリデータはルール固有のキーを追加します:
+
+| ルール | 追加キー |
+|---|---|
+| `min_length` | `expected_min` |
+| `max_length` | `expected_max` |
+| `min_value` | `expected_min` |
+| `max_value` | `expected_max` |
+| `regex` | `pattern` |
+| `one_of` | `choices` |
+
+#### FastAPI との統合
+
+```python
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from kakaorm import ValidationError
+
+@app.exception_handler(ValidationError)
+async def validation_error_handler(request: Request, exc: ValidationError):
+    return JSONResponse(status_code=422, content={"detail": exc.detail})
+```
 
 ### 手動バリデーション
 

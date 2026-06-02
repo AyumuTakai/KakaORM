@@ -144,22 +144,73 @@ class User(Model):
 
 ### Catching errors
 
-`ValidationError.errors` is a `dict[str, list[str]]` keyed by field name:
+`ValidationError` exposes two views of the same failures:
+
+| Attribute | Type | Purpose |
+|---|---|---|
+| `e.errors` | `dict[str, list[str]]` | Backward-compatible field → message map |
+| `e.detail` | `list[dict]` | Structured entries, one per failure |
 
 ```python
 user = User(name="A", age=-5, email="bad")
 try:
     await user.save()
 except ValidationError as e:
+    # ── Classic (backward-compatible) ──────────────────────────
     print(e.errors)
     # {
-    #   "name":  ["Ensure this value has at least 2 characters."],
-    #   "age":   ["Enter a value greater than or equal to 0."],
+    #   "name":  ["2 文字以上で入力してください。"],
+    #   "age":   ["0 以上の値を入力してください。"],
     #   "email": ["Enter a valid email address."],
     # }
+
+    # ── Structured ─────────────────────────────────────────────
+    for issue in e.detail:
+        print(issue)
+    # {"status": "validation_error", "field": "name",  "rule": "min_length",
+    #  "message": "2 文字以上で入力してください。", "received": "A", "expected_min": 2}
+    # {"status": "validation_error", "field": "age",   "rule": "min_value",
+    #  "message": "0 以上の値を入力してください。", "received": -5, "expected_min": 0}
+    # {"status": "validation_error", "field": "email", "rule": "regex",
+    #  "message": "...", "received": "bad", "pattern": "^[^@]+@[^@]+\\.[^@]+$"}
 ```
 
 All field errors are collected in a single pass — you get the full picture in one exception.
+
+#### Structured entry keys
+
+Every entry in `e.detail` always contains these keys:
+
+| Key | Value |
+|---|---|
+| `status` | Always `"validation_error"` |
+| `field` | Column name (e.g. `"name"`) |
+| `rule` | Validator name or `"custom"` |
+| `message` | Human-readable error message |
+| `received` | The value that failed validation |
+
+Built-in validators also add rule-specific keys:
+
+| Rule | Extra keys |
+|---|---|
+| `min_length` | `expected_min` |
+| `max_length` | `expected_max` |
+| `min_value` | `expected_min` |
+| `max_value` | `expected_max` |
+| `regex` | `pattern` |
+| `one_of` | `choices` |
+
+#### FastAPI integration
+
+```python
+from fastapi import Request
+from fastapi.responses import JSONResponse
+from kakaorm import ValidationError
+
+@app.exception_handler(ValidationError)
+async def validation_error_handler(request: Request, exc: ValidationError):
+    return JSONResponse(status_code=422, content={"detail": exc.detail})
+```
 
 ### Manual validation
 

@@ -480,6 +480,7 @@ class Model(metaclass=AsyncORMMeta):
                 # {"name": ["2 文字以上で入力してください。"], "age": ["0 以上の値を入力してください。"]}
         """
         errors: dict[str, list[str]] = {}
+        issues: list[dict] = []
         for name, col in self._meta.columns.items():
             if not col.validators:
                 continue
@@ -488,13 +489,28 @@ class Model(metaclass=AsyncORMMeta):
                 try:
                     validator(value)
                 except ValidationError as e:
-                    errors.setdefault(name, []).extend(
+                    msgs = [
                         msg
                         for msgs in e.errors.values()
                         for msg in msgs
-                    )
+                    ]
+                    errors.setdefault(name, []).extend(msgs)
+                    # 構造化エントリを組み立てる
+                    base = {
+                        "status": "validation_error",
+                        "field": name,
+                        "message": msgs[0] if msgs else "",
+                    }
+                    if e._issue is not None:
+                        # 組み込みバリデータ: rule / received / ルール固有キーを追加
+                        issues.append({**base, **e._issue})
+                    else:
+                        # カスタムバリデータ: rule は "custom"、received だけ付与
+                        issues.append({**base, "rule": "custom", "received": value})
         if errors:
-            raise ValidationError(errors)
+            exc = ValidationError(errors)
+            exc.detail = issues
+            raise exc
 
     async def save(self) -> None:
         """INSERT または UPDATE を実行する。_is_new が True なら INSERT。"""
