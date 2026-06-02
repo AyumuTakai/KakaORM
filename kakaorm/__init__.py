@@ -51,6 +51,7 @@ from kakaorm.validators import (
     regex,
     one_of,
 )
+from kakaorm.i18n import translate_detail, SUPPORTED_LOCALES
 
 # CLI（オプション依存なので try/except）
 try:
@@ -115,6 +116,9 @@ __all__ = [
     "max_value",
     "regex",
     "one_of",
+    # i18n
+    "translate_detail",
+    "SUPPORTED_LOCALES",
     # CLI (optional)
     "cli_main",
 ]

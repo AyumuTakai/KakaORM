@@ -211,6 +211,50 @@ async def validation_error_handler(request: Request, exc: ValidationError):
     return JSONResponse(status_code=422, content={"detail": exc.detail})
 ```
 
+### エラーメッセージのローカライズ
+
+`translate_detail()` で `e.detail` のメッセージを任意のロケールに変換できます。
+元の `detail` リストは変更されません（新しいリストを返します）。
+
+```python
+from kakaorm.i18n import translate_detail, SUPPORTED_LOCALES
+
+print(SUPPORTED_LOCALES)  # frozenset({"ja", "en"})
+
+try:
+    await user.save()
+except ValidationError as e:
+    issues = translate_detail(e.detail, locale="en")
+    for issue in issues:
+        print(f"[{issue['field']}] {issue['message']}")
+    # [name]  Must be at least 2 characters long.
+    # [score] Must be at least 0 (got -1).
+    # [email] Invalid format.
+    # [role]  Must be one of ['admin', 'user'] (got 'superuser').
+```
+
+**ロケール別メッセージ一覧:**
+
+| ルール | `ja` | `en` |
+|---|---|---|
+| `min_length(n)` | n 文字以上で入力してください。 | Must be at least n character(s) long. |
+| `max_length(n)` | n 文字以下で入力してください。 | Must be at most n character(s) long. |
+| `min_value(n)` | n 以上の値を入力してください。 | Must be at least n (got {received}). |
+| `max_value(n)` | n 以下の値を入力してください。 | Must be at most n (got {received}). |
+| `regex(p)` | 値が正規表現パターン 'p' に一致しません。 | Invalid format. |
+| `one_of(...)` | 値は [...] のいずれかである必要があります。 | Must be one of [...] (got {received}). |
+| custom | *(元のメッセージをそのまま使用)* | *(元のメッセージをそのまま使用)* |
+
+**FastAPI で `Accept-Language` ヘッダーに応じて動的切り替えする例:**
+
+```python
+@app.exception_handler(ValidationError)
+async def validation_error_handler(request: Request, exc: ValidationError):
+    lang = request.headers.get("Accept-Language", "ja")[:2]
+    locale = lang if lang in SUPPORTED_LOCALES else "ja"
+    return JSONResponse(status_code=422, content={"detail": translate_detail(exc.detail, locale)})
+```
+
 ### 手動バリデーション
 
 DB に触れずに `validate()` を直接呼び出すこともできます:
