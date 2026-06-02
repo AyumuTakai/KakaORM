@@ -7,7 +7,7 @@
 
 ## 現在バージョン
 
-**v0.4.6**（`kakaorm/__init__.py` と `pyproject.toml` の両方に記載）
+**v0.4.7**（`kakaorm/__init__.py` と `pyproject.toml` の両方に記載）
 
 ---
 
@@ -52,7 +52,7 @@ kakaorm/
 
 ### engine.py — `_raw_*` パターン
 
-v0.4.6 以降、クエリのログ差し込みのためにレイヤーが2段になっている。
+v0.4.5 以降、クエリのログ差し込みのためにレイヤーが2段になっている。
 
 ```
 Engine._fetch / _execute / _fetchval     ← ログ付きラッパー（基底クラスが実装）

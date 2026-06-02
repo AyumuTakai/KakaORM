@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2026-06-02
+
+### Added
+
+- **`ValidationError.detail`** — structured per-failure list alongside the existing
+  `errors` dict. Each entry contains `status`, `field`, `rule`, `message`, `received`,
+  and rule-specific extras (`expected_min`, `expected_max`, `pattern`, `choices`).
+  Fully backward-compatible: `e.errors` is unchanged.
+- **`kakaorm.i18n.translate_detail(detail, locale)`** — converts `e.detail` messages
+  to the target locale (`"ja"` / `"en"`). Returns a new list; original is not mutated.
+  Custom validator messages pass through unchanged (`rule: "custom"`).
+- **`SUPPORTED_LOCALES`** — `frozenset({"ja", "en"})` exported from both
+  `kakaorm` and `kakaorm.i18n`.
+- 36 new tests (`test_validation.py` +14, `test_i18n.py` +22).
+- Localization section in `docs/REFERENCE.md` / `REFERENCE.ja.md` with message
+  catalog table and FastAPI `Accept-Language` header example.
+
 ## [0.4.6] - 2026-06-02
 
 ### Added
