@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3] - 2026-06-02
+
+### Fixed
+
+- **`auto_now_add` / `auto_now` not applied on INSERT / UPDATE** — `Engine._insert()` now calls `col.get_insert_value()` for every column before collecting INSERT values, so `DateTimeColumn(auto_now_add=True)` correctly stamps the current UTC time on creation. `Engine._update()` now calls `col.get_update_value()` before building the SET clause, so `DateTimeColumn(auto_now=True)` correctly updates the timestamp on every save.
+
 ## [0.4.2] - 2026-06-02
 
 ### Added

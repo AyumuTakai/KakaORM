@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kakaorm"
-version = "0.4.2"
+version = "0.4.3"
 description = "Async-native ORM for PostgreSQL, SQLite, and MySQL/MariaDB"
 readme = "README.md"
 license = { file = "LICENSE" }

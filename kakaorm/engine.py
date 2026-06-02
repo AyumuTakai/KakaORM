@@ -166,6 +166,13 @@ class Engine(ABC):
         pk_name = meta.pk_name
         is_auto = meta.is_auto_pk
 
+        # auto_now_add など挿入時フックを適用してから列を収集する
+        for name, col in meta.columns.items():
+            if hasattr(col, "get_insert_value"):
+                new_val = col.get_insert_value(instance._data.get(name))
+                if new_val is not None:
+                    instance._data[name] = new_val
+
         if is_auto:
             cols = [
                 name for name, col in meta.columns.items()
@@ -203,6 +210,12 @@ class Engine(ABC):
         """Model インスタンスを UPDATE する。"""
         meta = instance._meta
         pk_name = meta.pk_name
+
+        # auto_now など更新時フックを適用する
+        for name, col in meta.columns.items():
+            if hasattr(col, "get_update_value"):
+                instance._data[name] = col.get_update_value(instance._data.get(name))
+
         col_names = [
             name for name, col in meta.columns.items()
             if not col.primary_key
