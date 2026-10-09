@@ -21,8 +21,8 @@
 from __future__ import annotations
 
 import re as _re
-from typing import Any, Callable
-
+from collections.abc import Callable
+from typing import Any
 
 # ── 例外 ──────────────────────────────────────────────────────
 
@@ -62,9 +62,9 @@ class ValidationError(Exception):
 
     def __init__(
         self,
-        errors: "dict[str, list[str]] | str",
+        errors: dict[str, list[str]] | str,
         *,
-        _issue: "dict | None" = None,
+        _issue: dict | None = None,
     ) -> None:
         if isinstance(errors, str):
             self.errors: dict[str, list[str]] = {"__all__": [errors]}
@@ -104,7 +104,7 @@ def max_length(n: int) -> Callable[[Any], None]:
     return validator
 
 
-def min_value(n: "int | float") -> Callable[[Any], None]:
+def min_value(n: float) -> Callable[[Any], None]:
     """数値の最小値を検証する。"""
     def validator(value: Any) -> None:
         if value is not None and value < n:
@@ -115,7 +115,7 @@ def min_value(n: "int | float") -> Callable[[Any], None]:
     return validator
 
 
-def max_value(n: "int | float") -> Callable[[Any], None]:
+def max_value(n: float) -> Callable[[Any], None]:
     """数値の最大値を検証する。"""
     def validator(value: Any) -> None:
         if value is not None and value > n:

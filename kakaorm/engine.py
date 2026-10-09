@@ -21,10 +21,11 @@ from __future__ import annotations
 import contextvars
 import logging
 import re
+import sqlite3
 import time
 from abc import ABC, abstractmethod
-from contextlib import asynccontextmanager
-from typing import Any
+from contextlib import asynccontextmanager, suppress
+from typing import Any, Self
 from urllib.parse import urlparse
 
 from kakaorm._sql import redact_url
@@ -478,11 +479,11 @@ class Engine(ABC):
         """位置 n のバインドパラメータ記号。asyncpg=$1, sqlite=?"""
         return "%s"  # デフォルト: psycopg / MySQL 形式
 
-    async def __aenter__(self) -> "Engine":
+    async def __aenter__(self) -> Self:
         await self.connect()
         return self
 
-    async def __aexit__(self, *_: Any) -> None:
+    async def __aexit__(self, *_: object) -> None:
         await self.disconnect()
 
 
@@ -609,13 +610,12 @@ class AsyncpgEngine(Engine):
     @asynccontextmanager
     async def transaction(self):
         """asyncpg トランザクション。専用接続を ContextVar に保持する。"""
-        async with self._pool.acquire() as conn:
-            async with conn.transaction():
-                token = _tx_conn.set(conn)
-                try:
-                    yield conn
-                finally:
-                    _tx_conn.reset(token)
+        async with self._pool.acquire() as conn, conn.transaction():
+            token = _tx_conn.set(conn)
+            try:
+                yield conn
+            finally:
+                _tx_conn.reset(token)
 
 
 # ── aiosqlite Engine ─────────────────────────────────────────
@@ -677,7 +677,7 @@ class AioSQLiteEngine(Engine):
         async with self._conn.execute(sql_exec, params) as cursor:
             if not _in_tx.get():
                 await self._conn.commit()
-            return cursor.rowcount if cursor.rowcount >= 0 else 0
+            return max(cursor.rowcount, 0)
 
     async def _raw_fetchval(self, sql: str, params: list[Any]) -> Any:
         """INSERT RETURNING id を SQLite の lastrowid で代替。"""
@@ -813,13 +813,12 @@ class AioSQLiteEngine(Engine):
         raw_name = model_cls._meta.table_name
         await self._execute(f"DELETE FROM {self.quote_identifier(raw_name)}", [])
         if restart_identity:
-            try:
+            # AUTOINCREMENT 列を持つテーブルが 1 つもないと sqlite_sequence 自体が存在しない
+            with suppress(sqlite3.OperationalError):
                 # sqlite_sequence.name は非クォートの生テーブル名で格納されている
                 await self._execute(
                     "DELETE FROM sqlite_sequence WHERE name = %s", [raw_name]
                 )
-            except Exception:
-                pass
 
     @staticmethod
     def _normalize_sql(sql: str) -> str:
@@ -897,11 +896,10 @@ class AioMySQLEngine(Engine):
                 await cur.execute(sql, params)
                 rows = await cur.fetchall()
                 return [{k.lower(): v for k, v in row.items()} for row in rows]
-        async with self._pool.acquire() as conn:
-            async with conn.cursor(aiomysql.DictCursor) as cur:
-                await cur.execute(sql, params)
-                rows = await cur.fetchall()
-                return [{k.lower(): v for k, v in row.items()} for row in rows]
+        async with self._pool.acquire() as conn, conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+            return [{k.lower(): v for k, v in row.items()} for row in rows]
 
     async def _insert(self, instance: Any) -> None:
         """MySQL 版: RETURNING 非対応のため lastrowid を使用。"""
@@ -916,7 +914,7 @@ class AioMySQLEngine(Engine):
                 if new_val is not None:
                     instance._data[name] = new_val
 
-        cols = [c for c in meta.columns.keys() if instance._data.get(c) is not None or c == pk_name]
+        cols = [c for c in meta.columns if instance._data.get(c) is not None or c == pk_name]
         if is_auto and pk_name in cols:
             cols.remove(pk_name)
         values = [meta.columns[c].to_db(instance._data[c]) for c in cols]
@@ -939,10 +937,9 @@ class AioMySQLEngine(Engine):
                     await cur.execute(sql, values)
                     new_pk = cur.lastrowid
             else:
-                async with self._pool.acquire() as conn:
-                    async with conn.cursor() as cur:
-                        await cur.execute(sql, values)
-                        new_pk = cur.lastrowid
+                async with self._pool.acquire() as conn, conn.cursor() as cur:
+                    await cur.execute(sql, values)
+                    new_pk = cur.lastrowid
             instance._data[pk_name] = new_pk
         else:
             await self._execute(sql, values)
@@ -952,11 +949,10 @@ class AioMySQLEngine(Engine):
         if conn:
             async with conn.cursor() as cur:
                 await cur.execute(sql, params)
-                return cur.rowcount if cur.rowcount >= 0 else 0
-        async with self._pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                return cur.rowcount if cur.rowcount >= 0 else 0
+                return max(cur.rowcount, 0)
+        async with self._pool.acquire() as conn, conn.cursor() as cur:
+            await cur.execute(sql, params)
+            return max(cur.rowcount, 0)
 
     async def _raw_fetchval(self, sql: str, params: list[Any]) -> Any:
         """INSERT RETURNING id を MySQL の lastrowid で代替。"""
@@ -970,13 +966,12 @@ class AioMySQLEngine(Engine):
                     return cur.lastrowid
                 row = await cur.fetchone()
                 return row[0] if row else None
-        async with self._pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql_exec, params)
-                if has_returning:
-                    return cur.lastrowid
-                row = await cur.fetchone()
-                return row[0] if row else None
+        async with self._pool.acquire() as conn, conn.cursor() as cur:
+            await cur.execute(sql_exec, params)
+            if has_returning:
+                return cur.lastrowid
+            row = await cur.fetchone()
+            return row[0] if row else None
 
     @asynccontextmanager
     async def transaction(self):
@@ -1040,12 +1035,11 @@ class Psycopg3Engine(Engine):
                 rows = await cur.fetchall()
                 cols = [d.name for d in cur.description] if cur.description else []
                 return [dict(zip(cols, row)) for row in rows]
-        async with self._pool.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                rows = await cur.fetchall()
-                cols = [d.name for d in cur.description] if cur.description else []
-                return [dict(zip(cols, row)) for row in rows]
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql, params)
+            rows = await cur.fetchall()
+            cols = [d.name for d in cur.description] if cur.description else []
+            return [dict(zip(cols, row)) for row in rows]
 
     async def _raw_execute(self, sql: str, params: list[Any]) -> int:
         conn = _tx_conn.get()
@@ -1053,10 +1047,9 @@ class Psycopg3Engine(Engine):
             async with conn.cursor() as cur:
                 await cur.execute(sql, params)
                 return cur.rowcount
-        async with self._pool.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                return cur.rowcount
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql, params)
+            return cur.rowcount
 
     async def _raw_fetchval(self, sql: str, params: list[Any]) -> Any:
         conn = _tx_conn.get()
@@ -1065,22 +1058,20 @@ class Psycopg3Engine(Engine):
                 await cur.execute(sql, params)
                 row = await cur.fetchone()
                 return row[0] if row else None
-        async with self._pool.connection() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql, params)
-                row = await cur.fetchone()
-                return row[0] if row else None
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(sql, params)
+            row = await cur.fetchone()
+            return row[0] if row else None
 
     @asynccontextmanager
     async def transaction(self):
         """psycopg3 トランザクション。専用接続を ContextVar に保持する。"""
-        async with self._pool.connection() as conn:
-            async with conn.transaction():
-                token = _tx_conn.set(conn)
-                try:
-                    yield conn
-                finally:
-                    _tx_conn.reset(token)
+        async with self._pool.connection() as conn, conn.transaction():
+            token = _tx_conn.set(conn)
+            try:
+                yield conn
+            finally:
+                _tx_conn.reset(token)
 
 
 # ── ファクトリ関数 ────────────────────────────────────────────
@@ -1158,7 +1149,7 @@ class _ConnectAwaitable:
             )
 
 
-def connect(url: str, **kwargs: Any) -> "_ConnectAwaitable":
+def connect(url: str, **kwargs: Any) -> _ConnectAwaitable:
     """
     接続 URL から適切な Engine を選択して初期化する。
 

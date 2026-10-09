@@ -2,3 +2,8 @@
 # E712: ORM の ColumnMeta.__eq__ オーバーロードが == True / == False を
 # SQL WHERE 句生成に使うため、ブール比較の警告を無効化する。
 ignore = ["E712"]
+
+[lint.per-file-ignores]
+# CLI コマンドはプロセスの最上位境界。どんな例外もメッセージを表示して
+# 終了コード 1 で終わらせるため、Exception を広く捕まえる。
+"kakaorm/cli/*" = ["BLE001"]

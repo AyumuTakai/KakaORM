@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import copy
 from collections import defaultdict
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, AsyncIterator, Generic, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 from kakaorm._sql import (
     SQLFragment,
@@ -25,7 +26,18 @@ from kakaorm._sql import (
     validate_non_negative_int,
     validate_order_term,
 )
-from kakaorm.columns.base import AggFunc, Avg, Case, ColumnCompare, ColumnMeta, Max, Min, Sum, UpdateExpr, WhereClause
+from kakaorm.columns.base import (
+    AggFunc,
+    Avg,
+    Case,
+    ColumnCompare,
+    ColumnMeta,
+    Max,
+    Min,
+    Sum,
+    UpdateExpr,
+    WhereClause,
+)
 
 if TYPE_CHECKING:
     from kakaorm.model import Model
@@ -84,7 +96,7 @@ class QuerySet(Generic[T]):
         stats = await Post.all().aggregate(total=Sum(Post.views), avg=Avg(Post.score))
     """
 
-    def __init__(self, model: Type[T]) -> None:
+    def __init__(self, model: type[T]) -> None:
         self._model = model
         self._where: list[WhereClause] = []
         self._order_by: list[str] = []
@@ -94,10 +106,10 @@ class QuerySet(Generic[T]):
         self._group_by: list[str] = []
         self._having: list[WhereClause] = []
         self._joins: list[JoinClause] = []
-        self._ctes: list[tuple[str, "QuerySet"]] = []          # WITH 句
+        self._ctes: list[tuple[str, QuerySet]] = []          # WITH 句
         self._prefetch_names: list[str] = []                    # Eager loading
 
-    def _copy_state_to(self, target: "QuerySet[T]") -> None:
+    def _copy_state_to(self, target: QuerySet[T]) -> None:
         """すべての状態をコピーする。サブクラスは super() 呼び出し後に固有フィールドを追加。"""
         target._where          = list(self._where)
         target._order_by       = list(self._order_by)
@@ -110,13 +122,13 @@ class QuerySet(Generic[T]):
         target._ctes           = list(self._ctes)
         target._prefetch_names = list(self._prefetch_names)
 
-    def _clone(self) -> "QuerySet[T]":
+    def _clone(self) -> QuerySet[T]:
         """サブクラスの型を保持したまま状態をコピーする。"""
         new = self.__class__(self._model)
         self._copy_state_to(new)
         return new
 
-    def _effective_where(self) -> list["WhereClause"]:
+    def _effective_where(self) -> list[WhereClause]:
         """実際の WHERE 句リストを返す。サブクラスで追加条件を注入できる。"""
         return self._where
 
@@ -140,17 +152,17 @@ class QuerySet(Generic[T]):
 
     # ── クエリ条件の積み上げ ──────────────────────────────────
 
-    def where(self, clause: WhereClause | ColumnCompare) -> "QuerySet[T]":
+    def where(self, clause: WhereClause | ColumnCompare) -> QuerySet[T]:
         """WHERE 条件を追加 (複数は AND で結合)。"""
         qs = self._clone()
         qs._where.append(_to_where(clause))
         return qs
 
-    def exclude(self, clause: WhereClause | ColumnCompare) -> "QuerySet[T]":
+    def exclude(self, clause: WhereClause | ColumnCompare) -> QuerySet[T]:
         """NOT (clause) を追加。"""
         return self.where(~_to_where(clause))
 
-    def order_by(self, *cols: str) -> "QuerySet[T]":
+    def order_by(self, *cols: str) -> QuerySet[T]:
         """
         ORDER BY を指定。ColumnMeta.asc / .desc や AggFunc.asc / .desc を渡す。
 
@@ -161,13 +173,13 @@ class QuerySet(Generic[T]):
         qs._order_by = [validate_order_term(c) for c in cols]
         return qs
 
-    def limit(self, n: int) -> "QuerySet[T]":
+    def limit(self, n: int) -> QuerySet[T]:
         """LIMIT を指定。0 以上の int のみ受け付ける（文字列は TypeError）。"""
         qs = self._clone()
         qs._limit_val = validate_non_negative_int(n, "limit")
         return qs
 
-    def offset(self, n: int) -> "QuerySet[T]":
+    def offset(self, n: int) -> QuerySet[T]:
         """OFFSET を指定。0 以上の int のみ受け付ける（文字列は TypeError）。"""
         qs = self._clone()
         qs._offset_val = validate_non_negative_int(n, "offset")
@@ -194,7 +206,7 @@ class QuerySet(Generic[T]):
                 cols.append((validate_column_ref(expr, "select() column"), []))
         return cols
 
-    def select(self, *exprs: Any) -> "QuerySet[T]":
+    def select(self, *exprs: Any) -> QuerySet[T]:
         """
         取得する列・集計式・CASE WHEN 式を指定する（既存の SELECT を置き換える）。
         ColumnMeta / AggFunc / Case を混在して渡せる。
@@ -203,7 +215,7 @@ class QuerySet(Generic[T]):
         qs._select_cols = self._parse_exprs(exprs)
         return qs
 
-    def also_select(self, *exprs: Any) -> "QuerySet[T]":
+    def also_select(self, *exprs: Any) -> QuerySet[T]:
         """
         既存の SELECT に列・集計式・CASE WHEN 式を追加する。
         SELECT * の状態（_select_cols が None）から呼ぶと、指定した列だけを追加する形になる。
@@ -218,7 +230,7 @@ class QuerySet(Generic[T]):
         qs._select_cols = existing + self._parse_exprs(exprs)
         return qs
 
-    def group_by(self, *exprs: Any) -> "QuerySet[T]":
+    def group_by(self, *exprs: Any) -> QuerySet[T]:
         """GROUP BY 句を追加。ColumnMeta を渡す。"""
         qs = self._clone()
         qs._group_by = [
@@ -228,31 +240,31 @@ class QuerySet(Generic[T]):
         ]
         return qs
 
-    def having(self, clause: WhereClause) -> "QuerySet[T]":
+    def having(self, clause: WhereClause) -> QuerySet[T]:
         """HAVING 句を追加。AggFunc の比較演算子で生成した WhereClause を渡す。"""
         qs = self._clone()
         qs._having.append(clause)
         return qs
 
-    def join(self, model: Any, *, on: ColumnCompare) -> "QuerySet[T]":
+    def join(self, model: Any, *, on: ColumnCompare) -> QuerySet[T]:
         """INNER JOIN を追加。"""
         qs = self._clone()
         qs._joins.append(JoinClause(model, on.sql, "INNER"))
         return qs
 
-    def left_join(self, model: Any, *, on: ColumnCompare) -> "QuerySet[T]":
+    def left_join(self, model: Any, *, on: ColumnCompare) -> QuerySet[T]:
         """LEFT JOIN を追加。"""
         qs = self._clone()
         qs._joins.append(JoinClause(model, on.sql, "LEFT"))
         return qs
 
-    def right_join(self, model: Any, *, on: ColumnCompare) -> "QuerySet[T]":
+    def right_join(self, model: Any, *, on: ColumnCompare) -> QuerySet[T]:
         """RIGHT JOIN を追加。"""
         qs = self._clone()
         qs._joins.append(JoinClause(model, on.sql, "RIGHT"))
         return qs
 
-    def with_cte(self, name: str, queryset: "QuerySet") -> "QuerySet[T]":
+    def with_cte(self, name: str, queryset: QuerySet) -> QuerySet[T]:
         """
         WITH 句（CTE）を追加する。
 
@@ -280,7 +292,7 @@ class QuerySet(Generic[T]):
         qs._ctes.append((validate_identifier(name, "CTE name"), queryset))
         return qs
 
-    def prefetch(self, *relation_names: str) -> "QuerySet[T]":
+    def prefetch(self, *relation_names: str) -> QuerySet[T]:
         """
         リレーションを一括プリフェッチして N+1 問題を解消する。
 
@@ -413,9 +425,7 @@ class QuerySet(Generic[T]):
         """JOIN / GROUP BY / 集計式 / CASE WHEN がある場合は list[dict] を返す。"""
         if self._joins or self._group_by:
             return True
-        if self._select_cols and any("(" in col_sql for col_sql, _ in self._select_cols):
-            return True
-        return False
+        return bool(self._select_cols) and any("(" in col_sql for col_sql, _ in self._select_cols)
 
     # ── 実行系 ────────────────────────────────────────────────
 
@@ -463,7 +473,8 @@ class QuerySet(Generic[T]):
                     break
 
             if not isinstance(descriptor, _RelationshipDescriptor):
-                raise AttributeError(
+                # 「その名前の関係が存在しない」ことを表すため AttributeError を維持する
+                raise AttributeError(  # noqa: TRY004
                     f"'{self._model.__name__}' に関係 '{rel_name}' が見つかりません。"
                     " has_many / has_one / belongs_to で定義されているか確認してください。"
                 )

@@ -10,7 +10,7 @@ import importlib.util
 import inspect
 import sys
 from pathlib import Path
-from typing import Any, Type
+from typing import Any
 
 import kakaorm
 from kakaorm._sql import redact_url
@@ -43,7 +43,7 @@ def ensure_migrations_dir(path: Path) -> None:
         gitkeep.touch()
 
 
-def load_models_from_file(file_path: str) -> list[Type[Model]]:
+def load_models_from_file(file_path: str) -> list[type[Model]]:
     """
     Python ファイルから Model サブクラスを抽出する。
 
@@ -64,7 +64,7 @@ def load_models_from_file(file_path: str) -> list[Type[Model]]:
     spec.loader.exec_module(module)
 
     # Model サブクラスを抽出
-    models: list[Type[Model]] = []
+    models: list[type[Model]] = []
     for name, obj in inspect.getmembers(module):
         if (
             inspect.isclass(obj)

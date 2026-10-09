@@ -11,8 +11,10 @@ Column 基底クラス
 """
 
 from __future__ import annotations
+
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Generic, Sequence, TypeVar, overload
+from typing import Any, Generic, TypeVar, overload
 
 from kakaorm._sql import (
     SQLFragment,
@@ -38,7 +40,7 @@ class AggFunc:
         self._col_expr = col_expr
         self._alias: str | None = None
 
-    def label(self, alias: str) -> "AggFunc":
+    def label(self, alias: str) -> AggFunc:
         """AS alias を付ける。alias は識別子として検証される。"""
         new = self.__class__.__new__(self.__class__)
         AggFunc.__init__(new, self._func, self._col_expr)
@@ -49,7 +51,7 @@ class AggFunc:
         self,
         partition_by: list[Any] | None = None,
         order_by: list[Any] | None = None,
-    ) -> "WindowedAgg":
+    ) -> WindowedAgg:
         """集計関数をウィンドウ関数に変換する。"""
         return WindowedAgg(self._func, self._col_expr, partition_by, order_by)
 
@@ -74,22 +76,22 @@ class AggFunc:
         return SQLFragment(f"{self._having_expr()} DESC")
 
     # HAVING 条件生成のための比較演算子
-    def __eq__(self, other: Any) -> "WhereClause":       # type: ignore[override]
+    def __eq__(self, other: object) -> WhereClause:       # type: ignore[override]
         return WhereClause(f"{self._having_expr()} = %s", [other])
 
-    def __ne__(self, other: Any) -> "WhereClause":       # type: ignore[override]
+    def __ne__(self, other: object) -> WhereClause:       # type: ignore[override]
         return WhereClause(f"{self._having_expr()} != %s", [other])
 
-    def __gt__(self, other: Any) -> "WhereClause":
+    def __gt__(self, other: Any) -> WhereClause:
         return WhereClause(f"{self._having_expr()} > %s", [other])
 
-    def __ge__(self, other: Any) -> "WhereClause":
+    def __ge__(self, other: Any) -> WhereClause:
         return WhereClause(f"{self._having_expr()} >= %s", [other])
 
-    def __lt__(self, other: Any) -> "WhereClause":
+    def __lt__(self, other: Any) -> WhereClause:
         return WhereClause(f"{self._having_expr()} < %s", [other])
 
-    def __le__(self, other: Any) -> "WhereClause":
+    def __le__(self, other: Any) -> WhereClause:
         return WhereClause(f"{self._having_expr()} <= %s", [other])
 
     def __repr__(self) -> str:
@@ -141,7 +143,7 @@ class WindowFunc:
     def __init__(self, col_expr: str | None = None) -> None:
         # サブクラスで property が定義されている場合（LAG, LEAD, WindowedAgg）は
         # ここでは _func を設定しない
-        if not hasattr(type(self), "_func") or not isinstance(getattr(type(self), "_func"), property):
+        if not hasattr(type(self), "_func") or not isinstance(type(self)._func, property):
             self._func: str = ""  # ROW_NUMBER(), RANK(), LAG(...) 等
         self._col_expr: str | None = col_expr
         self._partition_by: list[str] = []
@@ -152,7 +154,7 @@ class WindowFunc:
         self,
         partition_by: list[Any] | None = None,
         order_by: list[Any] | None = None,
-    ) -> "WindowFunc":
+    ) -> WindowFunc:
         """
         OVER (PARTITION BY ... ORDER BY ...) を定義する。
         イミュータブル設計（新規インスタンスを返す）。
@@ -167,13 +169,13 @@ class WindowFunc:
 
         return new
 
-    def label(self, alias: str) -> "WindowFunc":
+    def label(self, alias: str) -> WindowFunc:
         """カラム別名を設定する（イミュータブル）。alias は識別子として検証される。"""
         new = self._clone()
         new._alias = validate_identifier(alias, "label")
         return new
 
-    def _clone(self) -> "WindowFunc":
+    def _clone(self) -> WindowFunc:
         """インスタンスのクローン（イミュータブル設計）。"""
         new = self.__class__.__new__(self.__class__)
         new.__dict__.update(self.__dict__)
@@ -302,10 +304,10 @@ class ColumnCompare:
     """
     sql: str
 
-    def __and__(self, other: "ColumnCompare") -> "ColumnCompare":
+    def __and__(self, other: ColumnCompare) -> ColumnCompare:
         return ColumnCompare(f"({self.sql}) AND ({other.sql})")
 
-    def __or__(self, other: "ColumnCompare") -> "ColumnCompare":
+    def __or__(self, other: ColumnCompare) -> ColumnCompare:
         return ColumnCompare(f"({self.sql}) OR ({other.sql})")
 
 
@@ -331,19 +333,19 @@ class WhereClause:
     sql: str
     params: list[Any] = field(default_factory=list)
 
-    def __and__(self, other: "WhereClause") -> "WhereClause":
+    def __and__(self, other: WhereClause) -> WhereClause:
         return WhereClause(
             f"({self.sql}) AND ({other.sql})",
             self.params + other.params,
         )
 
-    def __or__(self, other: "WhereClause") -> "WhereClause":
+    def __or__(self, other: WhereClause) -> WhereClause:
         return WhereClause(
             f"({self.sql}) OR ({other.sql})",
             self.params + other.params,
         )
 
-    def __invert__(self) -> "WhereClause":
+    def __invert__(self) -> WhereClause:
         return WhereClause(f"NOT ({self.sql})", self.params)
 
 
@@ -355,7 +357,7 @@ class ColumnMeta:
     モデルクラスのメタクラスが __set_name__ で自動的に名前を注入する。
     """
 
-    def __init__(self, column: "Column") -> None:
+    def __init__(self, column: Column) -> None:
         self._column = column
         self._name: str = ""
         self._table: str = ""
@@ -374,14 +376,14 @@ class ColumnMeta:
         return self._column.to_db(value)
 
     # ── 比較演算子 ────────────────────────────────────────────
-    def __eq__(self, other: Any) -> "WhereClause | ColumnCompare":   # type: ignore[override]
+    def __eq__(self, other: object) -> WhereClause | ColumnCompare:   # type: ignore[override]
         if isinstance(other, ColumnMeta):
             return ColumnCompare(f"{self._qualified()} = {other._qualified()}")
         if other is None:
             return WhereClause(f"{self._qualified()} IS NULL")
         return WhereClause(f"{self._qualified()} = %s", [self._to_db(other)])
 
-    def __ne__(self, other: Any) -> "WhereClause | ColumnCompare":   # type: ignore[override]
+    def __ne__(self, other: object) -> WhereClause | ColumnCompare:   # type: ignore[override]
         if isinstance(other, ColumnMeta):
             return ColumnCompare(f"{self._qualified()} != {other._qualified()}")
         if other is None:
@@ -407,7 +409,7 @@ class ColumnMeta:
     def ilike(self, pattern: str) -> WhereClause:
         return WhereClause(f"{self._qualified()} ILIKE %s", [pattern])
 
-    def in_(self, values: "Sequence[Any] | Any") -> WhereClause:
+    def in_(self, values: Sequence[Any] | Any) -> WhereClause:
         # サブクエリ対応: _build_sql() を持つオブジェクト (QuerySet / Subquery) を受け付ける
         if hasattr(values, "_build_sql"):
             sub_sql, sub_params = values._build_sql()
@@ -415,7 +417,7 @@ class ColumnMeta:
         placeholders = ", ".join(["%s"] * len(values))
         return WhereClause(f"{self._qualified()} IN ({placeholders})", [self._to_db(v) for v in values])
 
-    def not_in(self, values: "Sequence[Any] | Any") -> WhereClause:
+    def not_in(self, values: Sequence[Any] | Any) -> WhereClause:
         if hasattr(values, "_build_sql"):
             sub_sql, sub_params = values._build_sql()
             return WhereClause(f"{self._qualified()} NOT IN ({sub_sql})", sub_params)
@@ -432,25 +434,25 @@ class ColumnMeta:
         return WhereClause(f"{self._qualified()} BETWEEN %s AND %s", [self._to_db(low), self._to_db(high)])
 
     # ── 算術演算子（UPDATE 式生成用）────────────────────────────
-    def __add__(self, other: Any) -> "UpdateExpr":
+    def __add__(self, other: Any) -> UpdateExpr:
         return UpdateExpr(f"{self._qualified()} + %s", [other])
 
-    def __sub__(self, other: Any) -> "UpdateExpr":
+    def __sub__(self, other: Any) -> UpdateExpr:
         return UpdateExpr(f"{self._qualified()} - %s", [other])
 
-    def __mul__(self, other: Any) -> "UpdateExpr":
+    def __mul__(self, other: Any) -> UpdateExpr:
         return UpdateExpr(f"{self._qualified()} * %s", [other])
 
-    def __truediv__(self, other: Any) -> "UpdateExpr":
+    def __truediv__(self, other: Any) -> UpdateExpr:
         return UpdateExpr(f"{self._qualified()} / %s", [other])
 
-    def __radd__(self, other: Any) -> "UpdateExpr":
+    def __radd__(self, other: Any) -> UpdateExpr:
         return UpdateExpr(f"%s + {self._qualified()}", [other])
 
-    def __rsub__(self, other: Any) -> "UpdateExpr":
+    def __rsub__(self, other: Any) -> UpdateExpr:
         return UpdateExpr(f"%s - {self._qualified()}", [other])
 
-    def __rmul__(self, other: Any) -> "UpdateExpr":
+    def __rmul__(self, other: Any) -> UpdateExpr:
         return UpdateExpr(f"%s * {self._qualified()}", [other])
 
     @property
@@ -479,7 +481,7 @@ class When:
 
     def __init__(
         self,
-        condition: "WhereClause | ColumnCompare",
+        condition: WhereClause | ColumnCompare,
         *,
         then: Any,
     ) -> None:
@@ -524,7 +526,7 @@ class Case:
         self._default = default
         self._alias = validate_identifier(alias, "label") if alias is not None else None
 
-    def label(self, alias: str) -> "Case":
+    def label(self, alias: str) -> Case:
         """AS alias を付ける（SELECT で使用するとき）。"""
         return Case(*self._whens, default=self._default, alias=alias)
 
@@ -592,7 +594,7 @@ class Column(Generic[T]):
         unique: bool = False,
         index: bool = False,
         check: str | None = None,
-        validators: "list | None" = None,
+        validators: list | None = None,
     ) -> None:
         if args:
             raise TypeError(

@@ -28,8 +28,8 @@ SELECT はデフォルトでメインテーブルのみを対象にする。
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Type, TypeVar
+from datetime import UTC, datetime
+from typing import Any, Self, TypeVar
 
 from kakaorm.columns.base import WhereClause
 from kakaorm.model import Model
@@ -50,22 +50,22 @@ class ArchiveQuerySet(QuerySet[T]):
     ``include_deleted()`` で UNION ALL、``only_deleted()`` でアーカイブのみ。
     """
 
-    def __init__(self, model: Type[T]) -> None:
+    def __init__(self, model: type[T]) -> None:
         super().__init__(model)
         self._deleted_filter: str = DELETED_EXCLUDE
 
-    def _copy_state_to(self, target: "QuerySet[T]") -> None:
+    def _copy_state_to(self, target: QuerySet[T]) -> None:
         super()._copy_state_to(target)
         if isinstance(target, ArchiveQuerySet):
             target._deleted_filter = self._deleted_filter
 
-    def include_deleted(self) -> "ArchiveQuerySet[T]":
+    def include_deleted(self) -> ArchiveQuerySet[T]:
         """メインテーブルとアーカイブテーブルを UNION ALL で取得する。"""
         qs = self._clone()
         qs._deleted_filter = DELETED_INCLUDE
         return qs
 
-    def only_deleted(self) -> "ArchiveQuerySet[T]":
+    def only_deleted(self) -> ArchiveQuerySet[T]:
         """アーカイブテーブルのみを対象にする。"""
         qs = self._clone()
         qs._deleted_filter = DELETED_ONLY
@@ -270,7 +270,7 @@ class ArchiveQuerySet(QuerySet[T]):
         )
 
         where_sql, where_params = self._merge_clauses(self._where, "WHERE")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         insert_sql = (
             f"INSERT INTO {q_archive} ({col_list}, {q_archived_at}) "
@@ -352,16 +352,16 @@ class ArchiveModel(Model):
     # 実装を継承するため、ここでは all() と include_deleted/only_deleted のみ定義する。
 
     @classmethod
-    def all(cls: Type[T]) -> ArchiveQuerySet[T]:
+    def all(cls) -> ArchiveQuerySet[Self]:
         return ArchiveQuerySet(cls)
 
     @classmethod
-    def include_deleted(cls: Type[T]) -> ArchiveQuerySet[T]:
+    def include_deleted(cls) -> ArchiveQuerySet[Self]:
         """メインテーブルとアーカイブテーブルを UNION ALL で取得するクエリを開始する。"""
         return ArchiveQuerySet(cls).include_deleted()
 
     @classmethod
-    def only_deleted(cls: Type[T]) -> ArchiveQuerySet[T]:
+    def only_deleted(cls) -> ArchiveQuerySet[Self]:
         """アーカイブテーブルのみを対象にしたクエリを開始する。"""
         return ArchiveQuerySet(cls).only_deleted()
 

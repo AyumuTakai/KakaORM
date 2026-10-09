@@ -49,7 +49,7 @@ class _CachedProxy:
         return f"<CachedProxy value={self._value!r}>"
 
 
-def _check_prefetch_cache(obj: Any, name: str) -> "_CachedProxy | None":
+def _check_prefetch_cache(obj: Any, name: str) -> _CachedProxy | None:
     """
     インスタンスの _prefetch_cache にキャッシュがあれば _CachedProxy を返す。
     なければ None を返す。

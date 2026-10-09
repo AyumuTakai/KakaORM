@@ -16,7 +16,7 @@ Pydantic v2 プロトコル (__get_pydantic_core_schema__ / __get_pydantic_json_
 from __future__ import annotations
 
 import difflib
-from typing import TYPE_CHECKING, Any, ClassVar, Type, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self, TypeVar
 
 if TYPE_CHECKING:
     from kakaorm.query import QuerySet
@@ -69,7 +69,7 @@ class AsyncORMMeta(type):
         bases: tuple[type, ...],
         namespace: dict[str, Any],
         **kwargs: Any,
-    ) -> "AsyncORMMeta":
+    ) -> AsyncORMMeta:
         columns: dict[str, Column] = {}
 
         # 親クラスのカラムを継承
@@ -251,19 +251,19 @@ class Model(metaclass=AsyncORMMeta):
     # ── クラスメソッド: クエリエントリポイント ─────────────────
 
     @classmethod
-    def where(cls: Type[T], *clauses: WhereClause) -> "QuerySet[T]":
+    def where(cls, *clauses: WhereClause) -> QuerySet[Self]:
         qs = cls.all()
         for c in clauses:
             qs = qs.where(c)
         return qs
 
     @classmethod
-    def all(cls: Type[T]) -> "QuerySet[T]":
+    def all(cls) -> QuerySet[Self]:
         from kakaorm.query import QuerySet
         return QuerySet(cls)
 
     @classmethod
-    async def get(cls: Type[T], *clauses: WhereClause) -> T:
+    async def get(cls, *clauses: WhereClause) -> Self:
         """条件に一致する 1 件を返す。0 件は NotFound、複数件は MultipleResults を送出。"""
         qs = cls.all()
         for c in clauses:
@@ -276,22 +276,22 @@ class Model(metaclass=AsyncORMMeta):
         return results[0]
 
     @classmethod
-    async def first(cls: Type[T]) -> "T | None":
+    async def first(cls) -> Self | None:
         return await cls.all().first()
 
     @classmethod
-    async def last(cls: Type[T]) -> "T | None":
+    async def last(cls) -> Self | None:
         return await cls.all().last()
 
     @classmethod
-    async def get_or_none(cls: Type[T], *clauses: WhereClause) -> "T | None":
+    async def get_or_none(cls, *clauses: WhereClause) -> Self | None:
         try:
             return await cls.get(*clauses)
         except cls.NotFound:
             return None
 
     @classmethod
-    async def find(cls: Type[T], pk: Any) -> "T | None":
+    async def find(cls, pk: Any) -> Self | None:
         """
         PK 値で 1 件を検索し、存在しなければ None を返す。
 
@@ -307,7 +307,7 @@ class Model(metaclass=AsyncORMMeta):
         return await cls.get_or_none(pk_col == pk)
 
     @classmethod
-    async def create(cls: Type[T], **kwargs: Any) -> T:
+    async def create(cls, **kwargs: Any) -> Self:
         """インスタンスを作成して即 INSERT し、DB 生成の値 (id等) を返す。"""
         instance = cls(**kwargs)
         await instance.save()
@@ -315,10 +315,10 @@ class Model(metaclass=AsyncORMMeta):
 
     @classmethod
     async def get_or_create(
-        cls: Type[T],
-        defaults: "dict[str, Any] | None" = None,
+        cls,
+        defaults: dict[str, Any] | None = None,
         **lookup: Any,
-    ) -> "tuple[T, bool]":
+    ) -> tuple[Self, bool]:
         """
         lookup フィールドで検索し、存在すれば返し、なければ作成する。
 
@@ -334,8 +334,8 @@ class Model(metaclass=AsyncORMMeta):
                 defaults={"name": "Alice"},
             )
         """
-        from functools import reduce
         import operator
+        from functools import reduce
 
         if cls._engine is None:
             raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
@@ -350,10 +350,10 @@ class Model(metaclass=AsyncORMMeta):
 
     @classmethod
     async def update_or_create(
-        cls: Type[T],
-        defaults: "dict[str, Any] | None" = None,
+        cls,
+        defaults: dict[str, Any] | None = None,
         **lookup: Any,
-    ) -> "tuple[T, bool]":
+    ) -> tuple[Self, bool]:
         """
         lookup フィールドで検索し、存在すれば ``defaults`` で更新し、なければ作成する。
 
@@ -368,8 +368,8 @@ class Model(metaclass=AsyncORMMeta):
                 defaults={"title": "Hello World", "published": True},
             )
         """
-        from functools import reduce
         import operator
+        from functools import reduce
 
         if cls._engine is None:
             raise RuntimeError("No engine connected. Call kakaorm.connect() first.")
@@ -403,11 +403,11 @@ class Model(metaclass=AsyncORMMeta):
 
     @classmethod
     async def bulk_create(
-        cls: Type[T],
-        instances: list[T],
+        cls,
+        instances: list[Self],
         *,
         batch_size: int = 500,
-    ) -> list[T]:
+    ) -> list[Self]:
         """
         複数インスタンスを最小限の SQL で一括 INSERT する。
 
@@ -434,12 +434,12 @@ class Model(metaclass=AsyncORMMeta):
 
     @classmethod
     async def bulk_update(
-        cls: "Type[T]",
-        instances: "list[T]",
-        fields: "list[str] | None" = None,
+        cls,
+        instances: list[Self],
+        fields: list[str] | None = None,
         *,
         batch_size: int = 500,
-    ) -> "list[T]":
+    ) -> list[Self]:
         """
         複数インスタンスを最小限の SQL で一括 UPDATE する。
 
@@ -556,8 +556,8 @@ class Model(metaclass=AsyncORMMeta):
         self,
         *,
         exclude_none: bool = False,
-        exclude: "set[str] | None" = None,
-    ) -> "dict[str, Any]":
+        exclude: set[str] | None = None,
+    ) -> dict[str, Any]:
         """
         Pydantic 互換のシリアライズメソッド。
 
@@ -577,7 +577,7 @@ class Model(metaclass=AsyncORMMeta):
         return data
 
     @classmethod
-    def model_validate(cls: "Type[T]", obj: Any) -> "T":
+    def model_validate(cls, obj: Any) -> Self:
         """
         Pydantic 互換のバリデーション・変換メソッド。
         dict・同型インスタンス・from_attributes 対応オブジェクトを受け取る。
@@ -646,14 +646,21 @@ class Model(metaclass=AsyncORMMeta):
         )
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, _core_schema: Any, handler: Any) -> "dict[str, Any]":
+    def __get_pydantic_json_schema__(cls, _core_schema: Any, handler: Any) -> dict[str, Any]:
         """
         Pydantic v2 JSON スキーマ。Swagger UI / OpenAPI ドキュメントに
         カラム定義を反映させる。
         """
         from kakaorm.columns.types import (
-            IntColumn, StrColumn, FloatColumn, BoolColumn,
-            DateTimeColumn, DateColumn, TimeColumn, DecimalColumn, ForeignKey,
+            BoolColumn,
+            DateColumn,
+            DateTimeColumn,
+            DecimalColumn,
+            FloatColumn,
+            ForeignKey,
+            IntColumn,
+            StrColumn,
+            TimeColumn,
         )
 
         properties: dict[str, Any] = {}

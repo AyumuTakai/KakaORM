@@ -6,8 +6,9 @@
 """
 
 from __future__ import annotations
+
 import datetime
-from datetime import datetime as _datetime, timezone as _timezone
+from datetime import datetime as _datetime
 from decimal import Decimal
 from typing import Any
 
@@ -77,13 +78,13 @@ class DateTimeColumn(Column[_datetime]):
     def get_insert_value(self, value: Any) -> Any:
         """INSERT 時に auto_now_add なら現在時刻を差し込む。"""
         if self.auto_now_add and value is None:
-            return _datetime.now(_timezone.utc)
+            return _datetime.now(datetime.UTC)
         return value
 
     def get_update_value(self, value: Any) -> Any:
         """UPDATE 時に auto_now なら現在時刻を差し込む。"""
         if self.auto_now:
-            return _datetime.now(_timezone.utc)
+            return _datetime.now(datetime.UTC)
         return value
 
 

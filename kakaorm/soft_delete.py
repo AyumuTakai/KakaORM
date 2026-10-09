@@ -23,8 +23,8 @@ SELECT は デフォルトで deleted_at IS NULL のみ対象にする。
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Type, TypeVar
+from datetime import UTC, datetime
+from typing import Self, TypeVar
 
 from kakaorm.columns.base import WhereClause
 from kakaorm.columns.types import DateTimeColumn
@@ -47,13 +47,13 @@ class SoftDeleteQuerySet(QuerySet[T]):
     ``include_deleted()`` / ``only_deleted()`` で挙動を変更できる。
     """
 
-    def __init__(self, model: Type[T]) -> None:
+    def __init__(self, model: type[T]) -> None:
         super().__init__(model)
         self._deleted_filter: str = DELETED_EXCLUDE
 
     # ── _clone サポート ────────────────────────────────────────
 
-    def _copy_state_to(self, target: "QuerySet[T]") -> None:
+    def _copy_state_to(self, target: QuerySet[T]) -> None:
         super()._copy_state_to(target)
         # SoftDeleteQuerySet 固有フィールドをコピー
         if isinstance(target, SoftDeleteQuerySet):
@@ -67,13 +67,13 @@ class SoftDeleteQuerySet(QuerySet[T]):
 
     # ── フィルタ切り替え ──────────────────────────────────────
 
-    def include_deleted(self) -> "SoftDeleteQuerySet[T]":
+    def include_deleted(self) -> SoftDeleteQuerySet[T]:
         """削除済みレコードも含めて取得する。"""
         qs = self._clone()
         qs._deleted_filter = DELETED_INCLUDE
         return qs
 
-    def only_deleted(self) -> "SoftDeleteQuerySet[T]":
+    def only_deleted(self) -> SoftDeleteQuerySet[T]:
         """削除済みレコードのみを対象にする。"""
         qs = self._clone()
         qs._deleted_filter = DELETED_ONLY
@@ -92,7 +92,7 @@ class SoftDeleteQuerySet(QuerySet[T]):
 
     async def delete(self) -> int:
         """論理削除: マッチするレコードの deleted_at に現在時刻をセット。"""
-        return await self.update(deleted_at=datetime.now(timezone.utc))
+        return await self.update(deleted_at=datetime.now(UTC))
 
     async def restore(self) -> int:
         """論理削除を取り消す: deleted_at を NULL に戻す。"""
@@ -127,16 +127,16 @@ class SoftDeleteModel(Model):
     # ── クラスメソッド: SoftDeleteQuerySet を返す ──────────────
 
     @classmethod
-    def all(cls: Type[T]) -> SoftDeleteQuerySet[T]:
+    def all(cls) -> SoftDeleteQuerySet[Self]:
         return SoftDeleteQuerySet(cls)
 
     @classmethod
-    def include_deleted(cls: Type[T]) -> SoftDeleteQuerySet[T]:
+    def include_deleted(cls) -> SoftDeleteQuerySet[Self]:
         """削除済みレコードも含めたクエリを開始する。"""
         return SoftDeleteQuerySet(cls).include_deleted()
 
     @classmethod
-    def only_deleted(cls: Type[T]) -> SoftDeleteQuerySet[T]:
+    def only_deleted(cls) -> SoftDeleteQuerySet[Self]:
         """削除済みレコードのみを対象にしたクエリを開始する。"""
         return SoftDeleteQuerySet(cls).only_deleted()
 
@@ -151,7 +151,7 @@ class SoftDeleteModel(Model):
         if pk_val is None:
             raise ValueError("Cannot delete an unsaved model instance.")
         await self.before_delete()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         pk_col = getattr(type(self), pk_name)
         await type(self).include_deleted().where(pk_col == pk_val).update(deleted_at=now)
         self._data["deleted_at"] = now
