@@ -779,8 +779,8 @@ Available window function classes:
 | `RowNumber()` | `ROW_NUMBER()` | Unique sequential row number |
 | `Rank()` | `RANK()` | Ties share rank; next rank is skipped |
 | `DenseRank()` | `DENSE_RANK()` | Ties share rank; next rank is not skipped |
-| `Lag(col, n, default)` | `LAG(col, n, default)` | Value n rows before |
-| `Lead(col, n, default)` | `LEAD(col, n, default)` | Value n rows after |
+| `Lag(col, n, default)` | `LAG(col, n, default)` | Value n rows before (`default` is a bind parameter, `n` must be an int ≥ 0) |
+| `Lead(col, n, default)` | `LEAD(col, n, default)` | Value n rows after (`default` is a bind parameter, `n` must be an int ≥ 0) |
 | `Sum(col).over(...)` | `SUM(col) OVER (...)` | Running total |
 | `Avg(col).over(...)` | `AVG(col) OVER (...)` | Moving average |
 | `Max(col).over(...)` | `MAX(col) OVER (...)` | Window maximum |
@@ -1241,6 +1241,13 @@ engine.query_logging = False  # OFF (default)
 
 You can toggle it at any time — even mid-request.
 
+Bound parameter **values are hidden by default** (since v0.4.8) so that password hashes and
+personal data do not end up in log files. Opt in only in development:
+
+```python
+engine.query_log_params = True   # also log parameter values (default: False)
+```
+
 ### Configuring the logger
 
 ```python
@@ -1267,13 +1274,17 @@ Then run with `SQL_LOG=1 uvicorn app:main` to enable.
 ### Output format
 
 ```
+# query_log_params = False (default)
+kakaorm.sql | INSERT  INSERT INTO [post] ([title], [views]) VALUES (?, ?)  params=<2 param(s) hidden>  (0.3ms)
+
+# query_log_params = True
 kakaorm.sql | INSERT  INSERT INTO [post] ([title], [views]) VALUES (?, ?) params=['Hello', 0]  (0.3ms)
 kakaorm.sql | SELECT  SELECT COUNT(*) AS cnt FROM [post] WHERE views >= %s  params=[10]  (0.2ms)
 kakaorm.sql | UPDATE  UPDATE [post] SET views = post.views + %s  params=[1]  (0.3ms)
 kakaorm.sql | DELETE  DELETE FROM [post] WHERE [id] = ?  params=[2]  (0.1ms)
 ```
 
-Each line includes the operation type, full SQL, bound parameters, and elapsed time in milliseconds.
+Each line includes the operation type, full SQL, bound parameters (or their count), and elapsed time in milliseconds.
 
 > All ORM operations (INSERT, SELECT, UPDATE, DELETE, COUNT, bulk operations) are captured.
 > `bulk_create` with `executemany` is not logged per-row on SQLite/MySQL (it bypasses the
@@ -1361,8 +1372,8 @@ path = await migrator.autogenerate([User, Post], "./migrations", name="add_bio")
 # 2. Apply all pending migrations
 n = await migrator.run_files("./migrations")
 
-# 3. Roll back the latest migration
-await migrator.downgrade(steps=1)
+# 3. Roll back the latest migration (DOWN SQL is read from the files)
+await migrator.downgrade(steps=1, directory="./migrations")
 
 # View migration history
 for record in await migrator.history():
@@ -1383,6 +1394,16 @@ down = [
     "ALTER TABLE user DROP COLUMN bio",
 ]
 ```
+
+> **Pass `directory=` to `downgrade()`.** With it, the DOWN SQL comes from the migration
+> file and is compared with the copy stored in the `kakaorm_migrations` table; a mismatch
+> aborts with `RuntimeError` before anything is executed. Without it, the stored copy is
+> executed as-is and a `FutureWarning` is emitted — anyone who can write to the history
+> table could otherwise run arbitrary SQL with the migrator's privileges.
+>
+> Migration files are imported as Python code. Keep the migrations directory under version
+> control and writable only by trusted users. `autogenerate(name=...)` accepts only letters,
+> digits, `_` and `-`.
 
 ---
 
@@ -1420,7 +1441,7 @@ kakaorm showmigrations --db sqlite+aiosqlite:///./dev.db
 |---|---|
 | `init` | Initialize `migrations/` directory and config file |
 | `makemigrations` | Output a migration file from model-vs-DB diff |
-| `migrate` | Apply pending migrations (`--direction down` to roll back) |
+| `migrate` | Apply pending migrations (`--direction down` to roll back; DOWN SQL is read from the migration directory) |
 | `showmigrations` | Display migration history as a table |
 
 ---
@@ -1512,6 +1533,91 @@ TypeError: Column() does not accept positional arguments.
 
 ---
 
+### Non-int passed to `limit()` / `offset()`
+
+```python
+await Post.all().limit(request.query_params["limit"])   # str
+```
+
+```
+TypeError: limit must be an int, got str ('20'). Convert user input explicitly, e.g. int(request_value).
+ValueError: limit must be >= 0, got -1
+```
+
+`limit()` / `offset()` are written into the SQL text, so only non-negative `int` values are
+accepted (`bool`, `float` and `str` are rejected). Convert and bound-check user input first:
+`limit(min(int(q), 100))`.
+
+---
+
+### Invalid `order_by()` term
+
+```python
+await Post.all().order_by(request.query_params["sort"])  # "views DESC; DROP TABLE post"
+```
+
+```
+ValueError: Invalid order_by term: 'views DESC; DROP TABLE post'.
+  Use a column expression: .order_by(User.name.asc, User.id.desc)
+  Plain strings must look like 'column', 'table.column', 'column DESC'.
+  Never pass unvalidated user input to order_by(); map it to a column first.
+```
+
+Column expressions (`Post.views.desc`, `Count(Post.id).desc`, or `Post.views` itself) are
+always accepted. Plain strings must match `column [ASC|DESC] [NULLS FIRST|LAST]`. The same
+rule applies to `order_by=` / `partition_by=` in window functions and to strings passed to
+`select()` / `group_by()`.
+
+---
+
+### Invalid identifier (label / alias / CTE name / table name)
+
+```python
+Count(Post.id).label("n FROM post; --")
+await Post.all().aggregate(**{"total; --": Sum(Post.views)})
+Post.all().with_cte("x AS (SELECT 1)", qs)
+
+class Order(Model):
+    class Meta:
+        table_name = "[order]"
+```
+
+```
+ValueError: Invalid label: 'n FROM post; --'. Only letters, digits and underscores are allowed, and it must not start with a digit.
+ValueError: Invalid aggregate alias: 'total; --'. ...
+ValueError: Invalid CTE name: 'x AS (SELECT 1)'. ...
+ValueError: Invalid table name for Order: '[order]'. ...
+```
+
+Identifiers are embedded in SQL, so they must be plain identifiers. Reserved words are fine —
+KakaORM quotes table and column names automatically.
+
+---
+
+### Invalid DDL option
+
+```
+ValueError: check='price > 0; DROP TABLE x' contains ';', which is not allowed in a CHECK expression.
+ValueError: Invalid on_delete: 'CASCADE; --'. Choose one of: CASCADE, NO ACTION, RESTRICT, SET DEFAULT, SET NULL
+TypeError: max_length must be an int, got str ('10')
+ValueError: Product.Meta.indexes references unknown column(s): ['nope']
+```
+
+---
+
+### Migration history does not match the file
+
+```
+RuntimeError: DOWN SQL for '0003_add_bio' in kakaorm_migrations does not match 0003_add_bio.py. The history table may have been tampered with; aborting.
+FileNotFoundError: Migration file not found: /app/migrations/0003_add_bio.py. Refusing to execute DOWN SQL that only exists in the database.
+FutureWarning: downgrade() without directory= executes DOWN SQL stored in the kakaorm_migrations table as-is. ...
+```
+
+Raised by `downgrade(directory=...)`. Restore the original migration file (from version
+control) or investigate who modified the history table.
+
+---
+
 ## Security
 
 KakaORM always treats query values as bind parameters to prevent SQL injection.
@@ -1520,22 +1626,65 @@ KakaORM always treats query values as bind parameters to prevent SQL injection.
 - **Column names in `update()`** — keys not present in `_meta.columns` are rejected with `ValueError`
 - **Destination column names in `insert_into()`** — similarly whitelist-validated against `_meta.columns`
 - **Field names in `create()`** — unknown fields are rejected with `TypeError`; a typo suggestion is shown when a close match exists
+- **`limit()` / `offset()`** — only non-negative `int` values are accepted (v0.4.8)
+- **`order_by()` / window `order_by=` / `partition_by=`** — plain strings are whitelist-validated as `column [ASC|DESC] [NULLS FIRST|LAST]`; expressions must come from column objects (v0.4.8)
+- **`Lag` / `Lead` default values** — sent as bind parameters; offsets must be `int` (v0.4.8)
+- **Labels, aggregate aliases, CTE names, table names, string column refs in `select()` / `group_by()`** — validated as plain identifiers (v0.4.8)
+- **Identifier quoting** — embedded quote characters are escaped (`"` → `""` on PostgreSQL, `` ` `` → ``` `` ``` on MySQL); SQLite rejects names containing `]` (v0.4.8)
+- **DDL options** — `on_delete` is whitelisted, `max_length` / `max_digits` / `decimal_places` must be `int`, `check=` rejects `;`, `--`, `/*`, and `Meta.indexes` must reference existing columns (v0.4.8)
+- **Credentials** — passwords in connection URLs are replaced by `***` in error messages and warnings; query logs hide parameter values unless `engine.query_log_params = True` (v0.4.8)
+- **Migrations** — `downgrade(directory=...)` reads DOWN SQL from the files and detects a tampered history table; `autogenerate(name=...)` rejects path traversal (v0.4.8)
+
+### Trust boundaries
+
+The following inputs are **developer-controlled by design** and must never come from end users:
+
+| Input | Why |
+|---|---|
+| `check=` expressions | embedded verbatim into `CREATE TABLE` |
+| `engine.fetch()` / `execute()` SQL text | raw SQL — pass values via the `params` list only |
+| Migration files, `--models` file for the CLI | imported and executed as Python code |
+| Model / column definitions | become table and column names |
 
 > **Application-level notes**
 >
-> `order_by()` expands raw strings directly into SQL.
-> If ORDER BY accepts user input, implement a whitelist of allowed column names in your application layer:
+> If ORDER BY accepts user input, map it to a column object rather than passing the string through:
 >
 > ```python
-> ALLOWED = {"views", "title", "created_at"}
-> col = user_input if user_input in ALLOWED else "id"
-> results = await Post.all().order_by(f"{col} DESC")
+> SORTABLE = {"views": Post.views, "title": Post.title, "created_at": Post.created_at}
+> col = SORTABLE.get(user_input, Post.id)
+> results = await Post.all().order_by(col.desc)
 > ```
 >
-> Also note that `create()` / `save()` do not restrict writes to privileged fields (e.g. `is_admin`).
-> Exclude such fields from user input at the application layer.
+> `create()` / `save()` / `update()` reject unknown fields but do not restrict writes to
+> privileged **known** fields (e.g. `is_admin`, `role`, `id`). Build the keyword arguments
+> from an explicit allowlist instead of passing `**request.json()` directly:
+>
+> ```python
+> ALLOWED = {"name", "email"}
+> user = await User.create(**{k: v for k, v in payload.items() if k in ALLOWED})
+> ```
 
 ## Upgrade Guide
+
+### v0.4.7 → v0.4.8
+
+v0.4.8 is a security release. Code that only uses column expressions needs no changes;
+the items below now raise errors where they used to build unsafe SQL.
+
+| Before | After |
+|---|---|
+| `.limit("10")` | `.limit(int(value))` — strings raise `TypeError` |
+| `.order_by("LOWER(name)")`, `.order_by("views DESC, (SELECT ...)")` | Only `column [ASC\|DESC]` strings are accepted; use column objects |
+| `.label("my label")`, `with_cte("x-y", qs)` | Use plain identifiers (`my_label`, `x_y`) |
+| `Meta.table_name = "[order]"` | `Meta.table_name = "order"` (quoting is automatic) |
+| `ForeignKey(..., on_delete="cascade")` | Still works (normalised to `CASCADE`); unknown actions raise `ValueError` |
+| `migrator.downgrade(steps=1)` | `migrator.downgrade(steps=1, directory="./migrations")` — the old form still works but emits `FutureWarning` |
+| `downgrade(steps=0)` rolled back **all** migrations | `steps=0` is now a no-op |
+| Query log showed parameter values | Values are hidden; set `engine.query_log_params = True` to show them |
+| `Lag(col, 1, 0)` returned `'0'` (string) on some DBs | `default` is a bind parameter and keeps its Python type |
+
+---
 
 ### v0.4.1 → v0.4.2
 
@@ -1615,13 +1764,14 @@ class Order(Model):
         table_name = "order"  # KakaORM quotes this automatically
 ```
 
-> **Do not quote manually.** Adding quote characters yourself causes double-quoting:
+> **Do not quote manually.** Since v0.4.8, table names must be plain identifiers
+> (letters, digits, `_`), so quote characters raise `ValueError` at class definition:
 >
 > ```python
 > class Meta:
->     table_name = "[order]"   # ❌ becomes [[order]] on SQLite
->     table_name = '"order"'   # ❌ manual quoting is unnecessary
->     table_name = '`order`'   # ❌ manual quoting is unnecessary
+>     table_name = "[order]"   # ❌ ValueError: Invalid table name
+>     table_name = '"order"'   # ❌ ValueError
+>     table_name = '`order`'   # ❌ ValueError
 > ```
 >
 > Where possible, prefer names that avoid reserved words (e.g. `orders` instead of `order`).

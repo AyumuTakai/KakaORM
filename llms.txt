@@ -1,7 +1,7 @@
 # KakaORM
 
 > Async-native ORM for PostgreSQL, SQLite, and MySQL/MariaDB.
-> Version: 0.4.7 | Python 3.11+ | asyncio only
+> Version: 0.4.8 | Python 3.11+ | asyncio only
 
 ---
 
@@ -118,7 +118,34 @@ await plan.apply()
 
 # ✅ CORRECT — run() is the one-liner (no-op when schema is current)
 await Migrator(engine).run([Author, Post])
+
+# ❌ WRONG — user input straight into SQL-text positions (raises TypeError / ValueError)
+await Post.all().limit(request.query_params["limit"])      # str → TypeError
+await Post.all().order_by(request.query_params["sort"])    # validated; expressions rejected
+
+# ✅ CORRECT — convert / map user input first
+await Post.all().limit(min(int(q_limit), 100))
+SORTABLE = {"views": Post.views, "title": Post.title}
+await Post.all().order_by(SORTABLE.get(q_sort, Post.id).desc)
+
+# ❌ WRONG — mass assignment of privileged known fields
+await User.create(**payload)          # payload may contain is_admin=True
+
+# ✅ CORRECT — allowlist the fields
+await User.create(**{k: v for k, v in payload.items() if k in {"name", "email"}})
+
+# ❌ WRONG — manual quoting in Meta.table_name (ValueError since 0.4.8)
+class Meta: table_name = "[order]"
+# ✅ CORRECT — reserved words are quoted automatically
+class Meta: table_name = "order"
 ```
+
+Security rules (0.4.8+): `limit`/`offset` accept non-negative `int` only; plain-string
+`order_by` / `group_by` / `select` / window `order_by=`/`partition_by=` must be
+`column` / `table.column` [`ASC`|`DESC`]; `label()`, aggregate aliases, CTE names and
+table names must be identifiers; `check=` rejects `;`, `--`, `/*`; `on_delete` is
+whitelisted. `check=`, raw SQL text, migration files and model definitions are trusted
+developer input — never build them from user input.
 
 ---
 
@@ -288,7 +315,7 @@ await plan.apply_down()  # rollback
 vmigrator = VersionedMigrator(engine)
 path = await vmigrator.autogenerate([Author, Post], "./migrations", name="add_bio")
 n    = await vmigrator.run_files("./migrations")   # apply pending
-await vmigrator.downgrade(steps=1)                 # rollback latest
+await vmigrator.downgrade(steps=1, directory="./migrations")  # rollback latest (DOWN SQL from files; detects tampering)
 history = await vmigrator.history()                # list applied
 ```
 
@@ -355,11 +382,12 @@ await post.restore()                           # clears deleted_at
 ```python
 engine.query_logging = True   # ON  — logs to kakaorm.sql at DEBUG level
 engine.query_logging = False  # OFF — default
+engine.query_log_params = True  # also log parameter values (default False: "<N param(s) hidden>")
 
 import logging
 logging.basicConfig(level=logging.DEBUG)
 logging.getLogger("kakaorm.sql").setLevel(logging.DEBUG)
-# Output: kakaorm.sql | SELECT ... params=[1] (0.3ms)
+# Output: kakaorm.sql | SELECT ... params=<1 param(s) hidden> (0.3ms)
 ```
 
 ---

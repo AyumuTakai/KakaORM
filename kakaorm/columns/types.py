@@ -11,7 +11,11 @@ from datetime import datetime as _datetime, timezone as _timezone
 from decimal import Decimal
 from typing import Any
 
+from kakaorm._sql import validate_non_negative_int
 from kakaorm.columns.base import Column
+
+#: ForeignKey(on_delete=...) に指定できる参照アクション
+_ON_DELETE_ACTIONS = frozenset({"CASCADE", "SET NULL", "SET DEFAULT", "RESTRICT", "NO ACTION"})
 
 
 class IntColumn(Column[int]):
@@ -33,6 +37,8 @@ class StrColumn(Column[str]):
 
     def __init__(self, *args: Any, max_length: int | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        if max_length is not None:
+            max_length = validate_non_negative_int(max_length, "max_length")
         self.max_length = max_length
         if max_length:
             self.sql_type = f"VARCHAR({max_length})"
@@ -91,8 +97,14 @@ class ForeignKey(Column[int]):
 
     def __init__(self, related_model: Any, *, on_delete: str = "CASCADE", **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        action = " ".join(str(on_delete).upper().split())
+        if action not in _ON_DELETE_ACTIONS:
+            raise ValueError(
+                f"Invalid on_delete: {on_delete!r}. "
+                f"Choose one of: {', '.join(sorted(_ON_DELETE_ACTIONS))}"
+            )
         self._related_model = related_model
-        self.on_delete = on_delete
+        self.on_delete = action
 
     def ddl_fragment(self, quote_fn=None) -> str:
         _q = quote_fn or (lambda x: x)
@@ -115,6 +127,8 @@ class DecimalColumn(Column[Decimal]):
 
     def __init__(self, max_digits: int, decimal_places: int, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        max_digits = validate_non_negative_int(max_digits, "max_digits")
+        decimal_places = validate_non_negative_int(decimal_places, "decimal_places")
         self.max_digits = max_digits
         self.decimal_places = decimal_places
         self.sql_type = f"NUMERIC({max_digits},{decimal_places})"

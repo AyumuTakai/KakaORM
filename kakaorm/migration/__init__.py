@@ -31,8 +31,25 @@ import datetime
 import importlib.util
 import json
 import pathlib
+import re
+import warnings
 from dataclasses import dataclass, field
 from typing import Any, Callable, Type
+
+#: autogenerate() の name に使えるスラグ
+_SLUG_RE = re.compile(r"[\w-]+")
+#: マイグレーションファイル名（拡張子なし）: 0001_add_bio
+_MIGRATION_NAME_RE = re.compile(r"[0-9]{4}_[\w-]+")
+
+
+def _load_migration_module(path: pathlib.Path) -> Any:
+    """マイグレーションファイルを動的インポートする。ファイルは信頼できる場所に置くこと。"""
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Migration file could not be loaded: {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod
 
 
 @dataclass
@@ -299,6 +316,11 @@ class Migrator:
         existing = sorted(out.glob("[0-9][0-9][0-9][0-9]_*.py"))
         seq = len(existing) + 1
         slug = name.strip().replace(" ", "_").lower() if name else "migration"
+        if not _SLUG_RE.fullmatch(slug):
+            # "../" などを含む名前で output_dir の外にファイルを書かせない
+            raise ValueError(
+                f"Invalid migration name: {name!r}. Use letters, digits, '_' or '-' only."
+            )
         filepath = out / f"{seq:04d}_{slug}.py"
 
         # WARNING コメントを除いた UP SQL
@@ -351,7 +373,7 @@ class Migrator:
         engine_type = type(self.engine).__name__
         if "SQLite" in engine_type:
             rows = await self.engine._fetch(
-                f"PRAGMA table_info({table_name})", []
+                f"PRAGMA table_info({self.engine.quote_identifier(table_name)})", []
             )
             return {row["name"]: row["type"] for row in rows}
         elif "MySQL" in engine_type:
@@ -537,18 +559,38 @@ class VersionedMigrator(Migrator):
             for r in rows
         ]
 
-    async def downgrade(self, steps: int = 1) -> int:
+    async def downgrade(self, steps: int = 1, *, directory: str | None = None) -> int:
         """
         直近 ``steps`` 件のマイグレーションをロールバックする。
 
-        :param steps: ロールバックする件数（デフォルト: 1）。
-        :returns:     実際にロールバックした件数。
+        :param steps:     ロールバックする件数（デフォルト: 1）。0 なら何もしない。
+        :param directory: マイグレーションファイルのディレクトリ。指定すると DOWN SQL を
+                          **ファイルの ``down`` から**読み込み、履歴テーブルに保存された
+                          内容と一致しなければ ``RuntimeError`` を出す（改ざん検知）。
+                          省略時は履歴テーブルの DOWN SQL をそのまま実行するため、
+                          ``FutureWarning`` を出す。
+        :returns:         実際にロールバックした件数。
 
         使い方::
 
-            await migrator.downgrade()       # 直近 1 件をロールバック
-            await migrator.downgrade(steps=3)  # 直近 3 件をロールバック
+            await migrator.downgrade(directory="./migrations")           # 直近 1 件
+            await migrator.downgrade(steps=3, directory="./migrations")  # 直近 3 件
         """
+        if isinstance(steps, bool) or not isinstance(steps, int) or steps < 0:
+            raise ValueError(f"steps must be a non-negative int, got {steps!r}")
+        if steps == 0:
+            return 0  # hist[-0:] は全件になるため明示的に止める
+
+        if directory is None:
+            warnings.warn(
+                "downgrade() without directory= executes DOWN SQL stored in the "
+                f"{self.HISTORY_TABLE} table as-is. Anyone who can write to that table can "
+                "run arbitrary SQL with the migrator's privileges. "
+                "Pass directory='./migrations' to load DOWN SQL from the migration files.",
+                FutureWarning,
+                stacklevel=2,
+            )
+
         await self.ensure_history_table()
         hist = await self.history()
         if not hist:
@@ -557,7 +599,11 @@ class VersionedMigrator(Migrator):
         to_undo = hist[-steps:]
         count = 0
         for record in reversed(to_undo):
-            down_stmts: list[str] = json.loads(record.down_sql) if record.down_sql else []
+            stored: list[str] = json.loads(record.down_sql) if record.down_sql else []
+            if directory is None:
+                down_stmts = stored
+            else:
+                down_stmts = self._down_from_file(directory, record.name, stored)
             for sql in down_stmts:
                 await self.engine._execute(sql, [])
             await self.engine._execute(
@@ -567,6 +613,36 @@ class VersionedMigrator(Migrator):
             count += 1
 
         return count
+
+    @staticmethod
+    def _down_from_file(directory: str, name: str, stored: list[str]) -> list[str]:
+        """マイグレーションファイルから DOWN SQL を読み、履歴テーブルの内容と照合する。"""
+        if not _MIGRATION_NAME_RE.fullmatch(name):
+            # 手動マイグレーション（run_manual）はファイルを持たず、DOWN SQL も空
+            if not stored:
+                return []
+            raise RuntimeError(
+                f"Migration history entry {name!r} has DOWN SQL but no valid file name; "
+                "refusing to execute SQL that only exists in the database."
+            )
+        base = pathlib.Path(directory).resolve()
+        path = (base / f"{name}.py").resolve()
+        if path.parent != base:
+            raise RuntimeError(f"Migration file for {name!r} resolves outside {base}")
+        if not path.is_file():
+            if not stored:
+                return []
+            raise FileNotFoundError(
+                f"Migration file not found: {path}. "
+                "Refusing to execute DOWN SQL that only exists in the database."
+            )
+        down_stmts = list(getattr(_load_migration_module(path), "down", []))
+        if stored and stored != down_stmts:
+            raise RuntimeError(
+                f"DOWN SQL for {name!r} in {VersionedMigrator.HISTORY_TABLE} does not match "
+                f"{path.name}. The history table may have been tampered with; aborting."
+            )
+        return down_stmts
 
     async def run_manual(
         self,
@@ -638,12 +714,8 @@ class VersionedMigrator(Migrator):
             if verbose:
                 print(f"  Applying: {name}")
 
-            # ファイルを動的インポート
-            spec = importlib.util.spec_from_file_location(name, path)
-            if spec is None or spec.loader is None:
-                raise ImportError(f"Migration file could not be loaded: {path}")
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+            # ファイルを動的インポート（Python コードとして実行される）
+            mod = _load_migration_module(path)
 
             up_stmts: list[str] = getattr(mod, "up", [])
             down_stmts: list[str] = getattr(mod, "down", [])

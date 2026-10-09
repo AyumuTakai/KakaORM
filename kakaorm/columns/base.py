@@ -14,6 +14,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Generic, Sequence, TypeVar, overload
 
+from kakaorm._sql import (
+    SQLFragment,
+    validate_column_ref,
+    validate_identifier,
+    validate_non_negative_int,
+    validate_order_term,
+)
+
 T = TypeVar("T")
 
 
@@ -31,10 +39,10 @@ class AggFunc:
         self._alias: str | None = None
 
     def label(self, alias: str) -> "AggFunc":
-        """AS alias を付ける。"""
+        """AS alias を付ける。alias は識別子として検証される。"""
         new = self.__class__.__new__(self.__class__)
         AggFunc.__init__(new, self._func, self._col_expr)
-        new._alias = alias
+        new._alias = validate_identifier(alias, "label")
         return new
 
     def over(
@@ -59,11 +67,11 @@ class AggFunc:
 
     @property
     def asc(self) -> str:
-        return f"{self._having_expr()} ASC"
+        return SQLFragment(f"{self._having_expr()} ASC")
 
     @property
     def desc(self) -> str:
-        return f"{self._having_expr()} DESC"
+        return SQLFragment(f"{self._having_expr()} DESC")
 
     # HAVING 条件生成のための比較演算子
     def __eq__(self, other: Any) -> "WhereClause":       # type: ignore[override]
@@ -89,7 +97,11 @@ class AggFunc:
 
 
 def _col_expr(col: Any) -> str:
-    return col._qualified() if hasattr(col, "_qualified") else str(col)
+    if hasattr(col, "_qualified"):
+        return col._qualified()
+    if isinstance(col, str) and col == "*":
+        return "*"
+    return validate_column_ref(col, "column expression")
 
 
 class Count(AggFunc):
@@ -148,29 +160,17 @@ class WindowFunc:
         new = self._clone()
 
         if partition_by:
-            new._partition_by = [
-                col._qualified() if hasattr(col, "_qualified") else str(col)
-                for col in partition_by
-            ]
+            new._partition_by = [_col_expr(col) for col in partition_by]
 
         if order_by:
-            new._order_by = []
-            for col in order_by:
-                if hasattr(col, "_qualified"):
-                    # asc / desc プロパティを確認
-                    if hasattr(col, "_desc") and col._desc:
-                        new._order_by.append(f"{col._qualified()} DESC")
-                    else:
-                        new._order_by.append(f"{col._qualified()} ASC")
-                else:
-                    new._order_by.append(str(col))
+            new._order_by = [validate_order_term(col) for col in order_by]
 
         return new
 
     def label(self, alias: str) -> "WindowFunc":
-        """カラム別名を設定する（イミュータブル）。"""
+        """カラム別名を設定する（イミュータブル）。alias は識別子として検証される。"""
         new = self._clone()
-        new._alias = alias
+        new._alias = validate_identifier(alias, "label")
         return new
 
     def _clone(self) -> "WindowFunc":
@@ -181,8 +181,12 @@ class WindowFunc:
         new._order_by = list(self._order_by)
         return new
 
+    def _params(self) -> list[Any]:
+        """_sql_expr() 内の %s に対応するバインドパラメータ。"""
+        return []
+
     def _sql_expr(self) -> str:
-        """SELECT リスト用の SQL 式（OVER 句を含む）。"""
+        """SELECT リスト用の SQL 式（OVER 句を含む）。パラメータは _params() で取得。"""
         window_parts = []
         if self._partition_by:
             window_parts.append(f"PARTITION BY {', '.join(self._partition_by)}")
@@ -225,17 +229,20 @@ class Lag(WindowFunc):
     def __init__(self, col: Any, offset: int = 1, default: Any = None) -> None:
         col_expr = _col_expr(col)
         super().__init__(col_expr)
-        self._offset = offset
+        self._offset = validate_non_negative_int(offset, "Lag offset")
         self._default = default
         self._col_expr = col_expr
 
     @property
     def _func(self) -> str:
-        """動的生成（offset, default を含む）。"""
+        """動的生成（offset を含む。default はバインドパラメータ）。"""
         args = [self._col_expr, str(self._offset)]
         if self._default is not None:
-            args.append(f"'{self._default}'")
+            args.append("%s")
         return f"LAG({', '.join(args)})"
+
+    def _params(self) -> list[Any]:
+        return [self._default] if self._default is not None else []
 
 
 class Lead(WindowFunc):
@@ -244,17 +251,20 @@ class Lead(WindowFunc):
     def __init__(self, col: Any, offset: int = 1, default: Any = None) -> None:
         col_expr = _col_expr(col)
         super().__init__(col_expr)
-        self._offset = offset
+        self._offset = validate_non_negative_int(offset, "Lead offset")
         self._default = default
         self._col_expr = col_expr
 
     @property
     def _func(self) -> str:
-        """動的生成（offset, default を含む）。"""
+        """動的生成（offset を含む。default はバインドパラメータ）。"""
         args = [self._col_expr, str(self._offset)]
         if self._default is not None:
-            args.append(f"'{self._default}'")
+            args.append("%s")
         return f"LEAD({', '.join(args)})"
+
+    def _params(self) -> list[Any]:
+        return [self._default] if self._default is not None else []
 
 
 class WindowedAgg(WindowFunc):
@@ -271,16 +281,9 @@ class WindowedAgg(WindowFunc):
         self._func_name = func_name  # SUM, AVG, MIN, MAX
         self._col_expr = col_expr
         if partition_by:
-            self._partition_by = [
-                col._qualified() if hasattr(col, "_qualified") else str(col)
-                for col in partition_by
-            ]
+            self._partition_by = [_col_expr(col) for col in partition_by]
         if order_by:
-            self._order_by = [
-                f"{col._qualified()} DESC" if hasattr(col, "_desc") and col._desc
-                else (col._qualified() if hasattr(col, "_qualified") else str(col))
-                for col in order_by
-            ]
+            self._order_by = [validate_order_term(col) for col in order_by]
 
     @property
     def _func(self) -> str:
@@ -452,11 +455,11 @@ class ColumnMeta:
 
     @property
     def asc(self) -> str:
-        return f"{self._qualified()} ASC"
+        return SQLFragment(f"{self._qualified()} ASC")
 
     @property
     def desc(self) -> str:
-        return f"{self._qualified()} DESC"
+        return SQLFragment(f"{self._qualified()} DESC")
 
     def __repr__(self) -> str:
         return f"<ColumnMeta {self._qualified()!r}>"
@@ -519,7 +522,7 @@ class Case:
     def __init__(self, *whens: When, default: Any = None, alias: str | None = None) -> None:
         self._whens = whens
         self._default = default
-        self._alias = alias
+        self._alias = validate_identifier(alias, "label") if alias is not None else None
 
     def label(self, alias: str) -> "Case":
         """AS alias を付ける（SELECT で使用するとき）。"""
@@ -547,6 +550,25 @@ class Case:
     def __repr__(self) -> str:
         sql, params = self._build()
         return f"<Case {sql!r} params={params}>"
+
+
+def _validate_check(check: Any) -> str | None:
+    """
+    CHECK 制約式の最低限の検証。
+
+    CHECK 式は SQL としてそのまま埋め込まれるため、開発者が書いた固定文字列のみを渡すこと。
+    文の区切り（;）やコメント（-- / /* */）は複文注入に使われるため拒否する。
+    """
+    if check is None:
+        return None
+    if not isinstance(check, str):
+        raise TypeError(f"check must be a str, got {type(check).__name__}")
+    for token in (";", "--", "/*", "*/"):
+        if token in check:
+            raise ValueError(
+                f"check={check!r} contains {token!r}, which is not allowed in a CHECK expression."
+            )
+    return check
 
 
 class Column(Generic[T]):
@@ -584,7 +606,7 @@ class Column(Generic[T]):
         self.default = default
         self.unique = unique
         self.index = index
-        self.check = check
+        self.check = _validate_check(check)
         self.validators: list = validators or []
         self._name: str = ""
 

@@ -26,6 +26,7 @@ An async-native ORM for Python. Supports PostgreSQL (`asyncpg` / `psycopg3`), SQ
 - **Validation** — Attach validators to columns (`min_length`, `max_length`, `min_value`, `max_value`, `regex`, `one_of`); `save()` auto-validates and raises `ValidationError` before any DB write
 - **Upsert** — `get_or_create()` and `update_or_create()` return `(instance, created: bool)`
 - **Bulk update** — `bulk_update(instances, fields=[...])` flushes many instances in a single `executemany` call
+- **Secure by default** — Values are always bound; everything embedded in SQL text (`limit`, `order_by`, labels, identifiers, DDL options) is validated, credentials are redacted from errors and logs, and `downgrade(directory=...)` detects a tampered migration history (see [Security](docs/REFERENCE.md#security))
 
 ## Installation
 
@@ -414,7 +415,8 @@ kakaorm/
 │   ├── test_custom_pk.py    # Custom primary keys
 │   ├── test_hooks.py        # Event hooks
 │   ├── test_relationship.py # Relation definitions
-│   └── test_security.py     # Security regression tests
+│   ├── test_security.py     # Security regression tests
+│   └── test_security_hardening.py # SQL-text validation, redaction, migration integrity
 ├── CHANGELOG.md             # Version history
 ├── LICENSE                  # MIT License
 ├── pyproject.toml           # Package metadata and build configuration

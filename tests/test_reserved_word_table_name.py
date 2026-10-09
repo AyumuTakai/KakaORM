@@ -97,54 +97,17 @@ class TestQuotedTableNameWorkaround:
         retrieved = await PurchaseOrder.get(PurchaseOrder.id == order.id)
         assert retrieved.name == "TEST-001"
 
-    @pytest.mark.asyncio
-    async def test_direct_quoted_table_name_sqlite_brackets(self, engine):
-        """Meta.table_nameに[order]クォートを直接指定する試行"""
-        # SQLiteではテーブル名を[tablename]で囲むことで予約語を回避できる
-
-        class Order(Model):
-            name = StrColumn(nullable=False)
-
-            class Meta:
-                # SQLiteのクォート: [order]
-                table_name = "[order]"
-
-        from kakaorm.migration import Migrator
-        plan = await Migrator(engine).plan([Order])
-        if not plan.is_empty():
-            try:
-                await plan.apply()
-                # テーブル作成に成功した場合
-                order = await Order.create(name="TEST-001")
-                assert order.id is not None
-            except Exception as e:
-                # kakaormが自動的にクォートを処理していない場合
-                pytest.skip(f"Quoted table_name support: {e}")
-
-    @pytest.mark.asyncio
-    async def test_direct_quoted_table_name_sqlite_quotes(self, engine):
-        """Meta.table_nameに"order"クォートを直接指定する試行"""
-        # SQLiteではテーブル名を"tablename"で囲むことで予約語を回避できる
-
-        class Order2(Model):
-            name = StrColumn(nullable=False)
-
-            class Meta:
-                # SQLiteのクォート: "order"
-                table_name = '"order2"'
-
-        from kakaorm.migration import Migrator
-        plan = await Migrator(engine).plan([Order2])
-        if not plan.is_empty():
-            try:
-                await plan.apply()
-                # テーブル作成に成功した場合
-                order = await Order2.create(name="TEST-002")
-                assert order.id is not None
-            except Exception as e:
-                # kakaormが自動的にクォートを処理していない場合
-                pytest.skip(f"Quoted table_name support: {e}")
-
+    @pytest.mark.parametrize("table_name", ["[order]", '"order2"', "`order3`"])
+    def test_pre_quoted_table_name_is_rejected(self, table_name):
+        """
+        Meta.table_name に引用符付きの名前を書くと定義時に ValueError になる。
+        予約語は Engine.quote_identifier が自動でクォートするので、素の名前を書けばよい。
+        """
+        with pytest.raises(ValueError, match="Invalid table name"):
+            type("Order", (Model,), {
+                "name": StrColumn(nullable=False),
+                "Meta": type("Meta", (), {"table_name": table_name}),
+            })
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

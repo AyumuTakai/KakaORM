@@ -247,7 +247,7 @@ class TestAutogenerate:
             await migrator.run_files(tmpdir)
             assert await migrator._table_exists("rf_model3")
 
-            await migrator.downgrade(steps=1)
+            await migrator.downgrade(steps=1, directory=tmpdir)
             assert not await migrator._table_exists("rf_model3")
 
 

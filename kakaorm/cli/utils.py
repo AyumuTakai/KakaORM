@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Type
 
 import kakaorm
+from kakaorm._sql import redact_url
 from kakaorm.model import Model
 
 
@@ -27,7 +28,7 @@ async def create_engine_from_url(url: str) -> Any:
         engine = await kakaorm.connect(url)
         return engine
     except Exception as e:
-        raise ValueError(f"Failed to create engine from URL {url}: {e}")
+        raise ValueError(f"Failed to create engine from URL {redact_url(url)}: {e}") from None
 
 
 def ensure_migrations_dir(path: Path) -> None:

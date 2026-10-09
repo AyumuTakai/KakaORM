@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2026-10-10
+
+Security release. See "Upgrade Guide → v0.4.7 → v0.4.8" in `docs/REFERENCE.md`.
+
+### Security
+
+- **SQL injection via `limit()` / `offset()`** — values were interpolated into the SQL
+  text unchecked. Only non-negative `int` values are now accepted (`TypeError` /
+  `ValueError` otherwise).
+- **SQL injection via `Lag` / `Lead` `default`** — the default was wrapped in single
+  quotes and inlined. It is now a bind parameter; `offset` must be a non-negative `int`.
+- **SQL injection via `order_by()`** — plain strings are whitelist-validated as
+  `column` / `table.column` [`ASC`|`DESC`] [`NULLS FIRST`|`LAST`]. Column expressions
+  (`Post.views.desc`, `Count(...).desc`, or a column itself) are always accepted. The same
+  validation applies to window `order_by=` / `partition_by=` and to string arguments of
+  `select()`, `group_by()` and aggregate classes.
+- **Identifier validation** — `label()`, `Case(alias=)`, `aggregate()` aliases,
+  `with_cte()` names and `Meta.table_name` must be plain identifiers.
+- **Identifier quoting** — `quote_identifier()` now escapes embedded quotes
+  (PostgreSQL `"` → `""`, MySQL `` ` `` → ``` `` ```), rejects `]` on SQLite, and rejects
+  empty / NUL-containing names. Composite index names and `PRAGMA table_info` targets are
+  now quoted; the JOIN table in `insert_into()` is now quoted.
+- **DDL options** — `ForeignKey(on_delete=)` is whitelisted; `max_length`, `max_digits`,
+  `decimal_places` must be `int`; `check=` rejects `;`, `--`, `/*`, `*/`;
+  `Meta.indexes` must reference existing columns.
+- **Credential leakage** — passwords in connection URLs are redacted (`***`) in the
+  "unsupported URL" error, the missing-`await` warning and CLI errors.
+- **Migration history tampering** — `VersionedMigrator.downgrade(directory=...)` reads
+  DOWN SQL from the migration files and aborts with `RuntimeError` if the copy in
+  `kakaorm_migrations` differs (or `FileNotFoundError` if only the DB has it). History
+  entries whose names would resolve outside the directory are rejected.
+- **Path traversal in `autogenerate(name=...)`** — names may contain only letters,
+  digits, `_` and `-`.
+
+### Added
+
+- `Engine.query_log_params` (default `False`) — opt in to logging bind parameter values.
+- `downgrade(..., directory=...)` keyword argument. The CLI `migrate --direction down`
+  passes the configured migrations directory automatically.
+- `tests/test_security_hardening.py` — 63 regression tests.
+- "Trust boundaries", new Error Message Reference entries and the v0.4.8 upgrade guide in
+  `docs/REFERENCE.md` / `REFERENCE.ja.md`.
+
+### Changed
+
+- Query logs hide bind parameter values by default (`params=<N param(s) hidden>`).
+- `downgrade()` without `directory=` emits `FutureWarning`.
+- `Lag` / `Lead` defaults keep their Python type instead of becoming string literals.
+- `Meta.table_name` containing quote characters (e.g. `"[order]"`) now raises
+  `ValueError` at class definition instead of failing later.
+
+### Fixed
+
+- `downgrade(steps=0)` rolled back every migration (`hist[-0:]`); it is now a no-op.
+  Negative `steps` raise `ValueError`.
+
 ## [0.4.7] - 2026-06-02
 
 ### Added

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Type, TypeVar
 if TYPE_CHECKING:
     from kakaorm.query import QuerySet
 
+from kakaorm._sql import validate_identifier
 from kakaorm.columns.base import Column, ColumnMeta, WhereClause
 from kakaorm.columns.types import IntColumn
 from kakaorm.validators import ValidationError
@@ -103,15 +104,21 @@ class AsyncORMMeta(type):
         inner_meta = namespace.get("Meta")
         if inner_meta and hasattr(inner_meta, "table_name"):
             table_name = inner_meta.table_name
+        # テーブル名は SQL に埋め込まれるため識別子として検証する
+        # （予約語は Engine.quote_identifier が自動でクォートするので Meta 側でクォートしない）
+        validate_identifier(table_name, f"table name for {name}")
 
         # 複合インデックス: Meta.indexes = [("col_a", "col_b"), ...]
         indexes: list[tuple[str, ...]] = []
         if inner_meta and hasattr(inner_meta, "indexes"):
             for idx in inner_meta.indexes:
-                if isinstance(idx, str):
-                    indexes.append((idx,))
-                else:
-                    indexes.append(tuple(idx))
+                idx_cols = (idx,) if isinstance(idx, str) else tuple(idx)
+                unknown = [c for c in idx_cols if c not in columns]
+                if unknown:
+                    raise ValueError(
+                        f"{name}.Meta.indexes references unknown column(s): {unknown!r}"
+                    )
+                indexes.append(idx_cols)
 
         cls._meta = ModelMeta(
             table_name=table_name,

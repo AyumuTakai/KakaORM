@@ -26,6 +26,7 @@ Python 向けの非同期ネイティブ ORM です。PostgreSQL (`asyncpg` / `p
 - **バリデーション** — カラムにバリデータを付与（`min_length`・`max_length`・`min_value`・`max_value`・`regex`・`one_of`）。`save()` が DB 書き込み前に自動検証し、失敗時は `ValidationError` を送出
 - **Upsert** — `get_or_create()` / `update_or_create()` が `(instance, created: bool)` を返す
 - **一括 UPDATE** — `bulk_update(instances, fields=[...])` で多数のインスタンスを `executemany` 1 回でフラッシュ
+- **セキュアなデフォルト** — 値は常にバインド。SQL 文字列に埋め込まれるもの（`limit`・`order_by`・label・識別子・DDL オプション）はすべて検証し、エラーやログからは認証情報を伏せ、`downgrade(directory=...)` はマイグレーション履歴の改ざんを検知する（[セキュリティ](docs/REFERENCE.ja.md#セキュリティ)参照）
 
 ## インストール
 
@@ -392,7 +393,8 @@ kakaorm/
 │   ├── test_custom_pk.py    # ユーザー定義主キー
 │   ├── test_hooks.py        # イベントフック
 │   ├── test_relationship.py # リレーション定義
-│   └── test_security.py     # セキュリティ回帰テスト
+│   ├── test_security.py     # セキュリティ回帰テスト
+│   └── test_security_hardening.py # SQL 文字列の検証・伏せ字・マイグレーション整合性
 ├── CHANGELOG.md             # バージョン履歴
 ├── LICENSE                  # MIT License
 ├── pyproject.toml           # パッケージメタデータ・ビルド設定

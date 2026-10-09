@@ -18,6 +18,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, AsyncIterator, Generic, Type, TypeVar
 
+from kakaorm._sql import (
+    SQLFragment,
+    validate_column_ref,
+    validate_identifier,
+    validate_non_negative_int,
+    validate_order_term,
+)
 from kakaorm.columns.base import AggFunc, Avg, Case, ColumnCompare, ColumnMeta, Max, Min, Sum, UpdateExpr, WhereClause
 
 if TYPE_CHECKING:
@@ -144,19 +151,26 @@ class QuerySet(Generic[T]):
         return self.where(~_to_where(clause))
 
     def order_by(self, *cols: str) -> "QuerySet[T]":
-        """ORDER BY を指定。ColumnMeta.asc / .desc や AggFunc.asc / .desc を渡す。"""
+        """
+        ORDER BY を指定。ColumnMeta.asc / .desc や AggFunc.asc / .desc を渡す。
+
+        素の文字列は ``"col"`` / ``"table.col"`` / ``"col DESC"`` 形式のみ受け付け、
+        それ以外（式・関数・複文など）は ValueError になる。
+        """
         qs = self._clone()
-        qs._order_by = list(cols)
+        qs._order_by = [validate_order_term(c) for c in cols]
         return qs
 
     def limit(self, n: int) -> "QuerySet[T]":
+        """LIMIT を指定。0 以上の int のみ受け付ける（文字列は TypeError）。"""
         qs = self._clone()
-        qs._limit_val = n
+        qs._limit_val = validate_non_negative_int(n, "limit")
         return qs
 
     def offset(self, n: int) -> "QuerySet[T]":
+        """OFFSET を指定。0 以上の int のみ受け付ける（文字列は TypeError）。"""
         qs = self._clone()
-        qs._offset_val = n
+        qs._offset_val = validate_non_negative_int(n, "offset")
         return qs
 
     @staticmethod
@@ -169,13 +183,15 @@ class QuerySet(Generic[T]):
                 cols.append((f"({sql}){alias}", params))
             elif hasattr(expr, "_sql_expr") and hasattr(expr, "_partition_by"):
                 # WindowFunc（ROW_NUMBER, RANK, LAG, LEAD 等）
-                cols.append((expr._sql_expr(), []))
+                cols.append((expr._sql_expr(), list(expr._params())))
             elif isinstance(expr, AggFunc):
                 cols.append((expr._sql_expr(), []))
             elif hasattr(expr, "_qualified"):
                 cols.append((expr._qualified(), []))
+            elif isinstance(expr, str) and expr == "*":
+                cols.append(("*", []))
             else:
-                cols.append((str(expr), []))
+                cols.append((validate_column_ref(expr, "select() column"), []))
         return cols
 
     def select(self, *exprs: Any) -> "QuerySet[T]":
@@ -206,7 +222,8 @@ class QuerySet(Generic[T]):
         """GROUP BY 句を追加。ColumnMeta を渡す。"""
         qs = self._clone()
         qs._group_by = [
-            expr._qualified() if hasattr(expr, "_qualified") else str(expr)
+            expr._qualified() if hasattr(expr, "_qualified")
+            else validate_column_ref(expr, "group_by() column")
             for expr in exprs
         ]
         return qs
@@ -260,7 +277,7 @@ class QuerySet(Generic[T]):
             rows = await Post.all().with_cte("recent_posts", recent).select(Post.title)
         """
         qs = self._clone()
-        qs._ctes.append((name, queryset))
+        qs._ctes.append((validate_identifier(name, "CTE name"), queryset))
         return qs
 
     def prefetch(self, *relation_names: str) -> "QuerySet[T]":
@@ -527,7 +544,7 @@ class QuerySet(Generic[T]):
         if self._model._engine:
             table = self._model._engine.quote_identifier(table)
         select_parts = [
-            f"{agg._having_expr()} AS {alias}"
+            f"{agg._having_expr()} AS {validate_identifier(alias, 'aggregate alias')}"
             for alias, agg in agg_exprs.items()
         ]
         where_sql, params = self._merge_clauses(self._effective_where(), "WHERE")
@@ -563,7 +580,7 @@ class QuerySet(Generic[T]):
     async def last(self) -> T | None:
         """pk 降順で最初の 1 件を返す。"""
         pk_name = self._model._meta.pk_name
-        results = await self.order_by(f"{pk_name} DESC").limit(1).execute()
+        results = await self.order_by(SQLFragment(f"{pk_name} DESC")).limit(1).execute()
         return results[0] if results else None
 
     async def exists(self) -> bool:
@@ -693,6 +710,8 @@ class QuerySet(Generic[T]):
 
         for j in self._joins:
             join_table = j.model._meta.table_name
+            if j.model._engine:
+                join_table = j.model._engine.quote_identifier(join_table)
             sql += f" {j.join_type} JOIN {join_table} ON {j.on_sql}"
 
         where_sql, where_params = self._merge_clauses(self._effective_where(), "WHERE")

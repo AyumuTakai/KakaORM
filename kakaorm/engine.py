@@ -27,6 +27,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlparse
 
+from kakaorm._sql import redact_url
+
 _sql_logger = logging.getLogger("kakaorm.sql")
 
 # ── トランザクション用 ContextVar ─────────────────────────────
@@ -53,6 +55,16 @@ class Engine(ABC):
     #: True にするとすべての SQL を kakaorm.sql ロガーに DEBUG レベルで出力する。
     #: ``engine.query_logging = True`` で有効化、``False`` で無効化できる。
     query_logging: bool = False
+
+    #: True にするとログにバインドパラメータの値も出力する。
+    #: パスワードハッシュや個人情報がログに残るため、デフォルトは False（件数のみ出力）。
+    query_log_params: bool = False
+
+    def _log_params(self, params: list[Any]) -> str:
+        """ログ出力用のパラメータ表現。query_log_params=False なら値を伏せる。"""
+        if self.query_log_params:
+            return repr(params)
+        return f"<{len(params)} param(s) hidden>"
 
     @abstractmethod
     async def connect(self) -> None:
@@ -82,7 +94,7 @@ class Engine(ABC):
         t = time.perf_counter()
         result = await self._raw_fetch(sql, params)
         ms = (time.perf_counter() - t) * 1000
-        _sql_logger.debug("SELECT  %s  params=%r  (%.1fms)", sql, params, ms)
+        _sql_logger.debug("SELECT  %s  params=%s  (%.1fms)", sql, self._log_params(params), ms)
         return result
 
     async def _execute(self, sql: str, params: list[Any]) -> int:
@@ -92,7 +104,7 @@ class Engine(ABC):
         result = await self._raw_execute(sql, params)
         ms = (time.perf_counter() - t) * 1000
         op = sql.split()[0].upper() if sql else "SQL"
-        _sql_logger.debug("%s  %s  params=%r  (%.1fms)", op, sql, params, ms)
+        _sql_logger.debug("%s  %s  params=%s  (%.1fms)", op, sql, self._log_params(params), ms)
         return result
 
     async def _fetchval(self, sql: str, params: list[Any]) -> Any:
@@ -101,7 +113,7 @@ class Engine(ABC):
         t = time.perf_counter()
         result = await self._raw_fetchval(sql, params)
         ms = (time.perf_counter() - t) * 1000
-        _sql_logger.debug("INSERT  %s  params=%r  (%.1fms)", sql, params, ms)
+        _sql_logger.debug("INSERT  %s  params=%s  (%.1fms)", sql, self._log_params(params), ms)
         return result
 
     @asynccontextmanager
@@ -128,10 +140,17 @@ class Engine(ABC):
         """
         テーブル名やカラム名をDB方言に応じてクォートする。
 
-        - PostgreSQL: "name"
-        - SQLite: [name]
-        - MySQL: `name`
+        - PostgreSQL: "name"（内部の " は "" にエスケープ）
+        - SQLite: [name]（] を含む名前は拒否）
+        - MySQL: `name`（内部の ` は `` にエスケープ）
         """
+
+    @staticmethod
+    def _check_identifier(name: str) -> str:
+        """quote_identifier の共通チェック。str 以外・空文字・NUL 文字を拒否する。"""
+        if not isinstance(name, str) or not name or "\x00" in name:
+            raise ValueError(f"Invalid SQL identifier: {name!r}")
+        return name
 
     def _adapt_ddl(self, ddl: str) -> str:
         """カラム DDL を DB 方言に合わせて変換する。デフォルトはそのまま返す。"""
@@ -365,7 +384,7 @@ class Engine(ABC):
         """Meta.indexes で宣言された複合インデックスを CREATE INDEX で発行する。"""
         exists = "IF NOT EXISTS " if if_not_exists else ""
         for idx_cols in meta.indexes:
-            idx_name = f"idx_{meta.table_name}_{'_'.join(idx_cols)}"
+            idx_name = self.quote_identifier(f"idx_{meta.table_name}_{'_'.join(idx_cols)}")
             # カラム名をクォート
             quoted_cols = ", ".join(self.quote_identifier(col) for col in idx_cols)
             quoted_table = self.quote_identifier(meta.table_name)
@@ -483,7 +502,8 @@ class AsyncpgEngine(Engine):
 
     def quote_identifier(self, name: str) -> str:
         """PostgreSQL: ダブルクォートでテーブル名・カラム名を囲む"""
-        return f'"{name}"'
+        name = self._check_identifier(name)
+        return '"' + name.replace('"', '""') + '"'
 
     async def connect(self) -> None:
         import asyncpg  # type: ignore
@@ -614,7 +634,10 @@ class AioSQLiteEngine(Engine):
         return ", ".join("?" for _ in range(n))
 
     def quote_identifier(self, name: str) -> str:
-        """SQLite: 角括弧でテーブル名・カラム名を囲む"""
+        """SQLite: 角括弧でテーブル名・カラム名を囲む（角括弧はエスケープできないため ] を拒否）"""
+        name = self._check_identifier(name)
+        if "]" in name:
+            raise ValueError(f"SQLite identifier must not contain ']': {name!r}")
         return f"[{name}]"
 
     def _adapt_ddl(self, ddl: str) -> str:
@@ -835,7 +858,8 @@ class AioMySQLEngine(Engine):
 
     def quote_identifier(self, name: str) -> str:
         """MySQL: バッククォートでテーブル名・カラム名を囲む"""
-        return f"`{name}`"
+        name = self._check_identifier(name)
+        return "`" + name.replace("`", "``") + "`"
 
     def _adapt_ddl(self, ddl: str) -> str:
         ddl = ddl.replace("SERIAL PRIMARY KEY", "INT AUTO_INCREMENT PRIMARY KEY")
@@ -992,7 +1016,8 @@ class Psycopg3Engine(Engine):
 
     def quote_identifier(self, name: str) -> str:
         """PostgreSQL: ダブルクォートでテーブル名・カラム名を囲む"""
-        return f'"{name}"'
+        name = self._check_identifier(name)
+        return '"' + name.replace('"', '""') + '"'
 
     async def connect(self) -> None:
         import psycopg_pool  # type: ignore
@@ -1090,7 +1115,7 @@ async def _connect_impl(url: str, **kwargs: Any) -> Engine:
         )
 
     else:
-        raise ValueError(f"Unsupported database URL: {url!r}")
+        raise ValueError(f"Unsupported database URL: {redact_url(url)!r}")
 
     await engine.connect()
     _register_engine(Model, engine)
@@ -1126,7 +1151,7 @@ class _ConnectAwaitable:
         if not self._awaited:
             import warnings
             warnings.warn(
-                f"kakaorm.connect({self._url!r}) was called without `await` and had no effect.\n"
+                f"kakaorm.connect({redact_url(self._url)!r}) was called without `await` and had no effect.\n"
                 "Fix: engine = await kakaorm.connect(url)",
                 RuntimeWarning,
                 stacklevel=2,

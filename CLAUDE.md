@@ -7,7 +7,7 @@
 
 ## 現在バージョン
 
-**v0.4.7**（`kakaorm/__init__.py` と `pyproject.toml` の両方に記載）
+**v0.4.8**（`kakaorm/__init__.py` と `pyproject.toml` の両方に記載）
 
 ---
 
@@ -29,6 +29,7 @@ kakaorm/
 │   ├── migration/
 │   │   └── __init__.py      Migrator / VersionedMigrator / MigrationPlan
 │   ├── validators.py        ValidationError + built-in validators
+│   ├── _sql.py              SQL 文字列に埋め込む値の検証（識別子 / ORDER BY / int / URL 伏せ字）
 │   ├── soft_delete.py       SoftDeleteModel
 │   ├── archive.py           ArchiveModel
 │   └── cli/                 kakaorm CLI
@@ -70,6 +71,12 @@ Engine._raw_fetch / _raw_execute / _raw_fetchval  ← ドライバ実装（各�
 サブクラスで `__init__` を定義するときは `*args` を受け取って `super().__init__(*args, **kwargs)` に渡すこと。
 
 ただし `ForeignKey` と `DecimalColumn` は意図的な位置引数を持つ（例外）。
+
+### _sql.py — SQL 文字列に埋め込む値
+
+バインドパラメータで渡せない箇所（識別子・ORDER BY・LIMIT/OFFSET・DDL の型パラメータ）は
+必ず `kakaorm/_sql.py` の `validate_*` を通す。ORM 内部が生成した信頼済み断片は
+`SQLFragment` で包む（`ColumnMeta.asc` などが返す）。f-string で値を直接埋め込まないこと。
 
 ### model.py — Model.__init__
 
@@ -188,4 +195,3 @@ Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
 - `[ ]` テーブル継承（single / joined / concrete）
 - `[ ]` セーブポイント
 - `[ ]` 既存 DB からのスキーマ反映（introspection）
-- `[ ]` `order_by()` へのユーザー入力のホワイトリスト検証（現状はアプリ側対応）

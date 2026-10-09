@@ -778,8 +778,8 @@ rows = await Post.all().select(
 | `RowNumber()` | `ROW_NUMBER()` | 連続した一意の行番号 |
 | `Rank()` | `RANK()` | 同率同順位・次は飛ばす |
 | `DenseRank()` | `DENSE_RANK()` | 同率同順位・次は飛ばさない |
-| `Lag(col, n, default)` | `LAG(col, n, default)` | n 行前の値 |
-| `Lead(col, n, default)` | `LEAD(col, n, default)` | n 行後の値 |
+| `Lag(col, n, default)` | `LAG(col, n, default)` | n 行前の値（`default` はバインドパラメータ、`n` は 0 以上の int） |
+| `Lead(col, n, default)` | `LEAD(col, n, default)` | n 行後の値（`default` はバインドパラメータ、`n` は 0 以上の int） |
 | `Sum(col).over(...)` | `SUM(col) OVER (...)` | 累積合計 |
 | `Avg(col).over(...)` | `AVG(col) OVER (...)` | 移動平均 |
 | `Max(col).over(...)` | `MAX(col) OVER (...)` | ウィンドウ最大値 |
@@ -1238,6 +1238,13 @@ engine.query_logging = False  # OFF（デフォルト）
 
 実行中であっても任意のタイミングで切り替えられます。
 
+パスワードハッシュや個人情報がログファイルに残らないよう、v0.4.8 以降は
+バインドパラメータの**値をデフォルトで伏せて**出力します。開発時のみ有効にしてください。
+
+```python
+engine.query_log_params = True   # パラメータの値もログに出す（デフォルト: False）
+```
+
 ### ロガーの設定
 
 ```python
@@ -1264,13 +1271,17 @@ if os.getenv("SQL_LOG"):
 ### 出力形式
 
 ```
+# query_log_params = False（デフォルト）
+kakaorm.sql | INSERT  INSERT INTO [post] ([title], [views]) VALUES (?, ?)  params=<2 param(s) hidden>  (0.3ms)
+
+# query_log_params = True
 kakaorm.sql | INSERT  INSERT INTO [post] ([title], [views]) VALUES (?, ?) params=['Hello', 0]  (0.3ms)
 kakaorm.sql | SELECT  SELECT COUNT(*) AS cnt FROM [post] WHERE views >= %s  params=[10]  (0.2ms)
 kakaorm.sql | UPDATE  UPDATE [post] SET views = post.views + %s  params=[1]  (0.3ms)
 kakaorm.sql | DELETE  DELETE FROM [post] WHERE [id] = ?  params=[2]  (0.1ms)
 ```
 
-操作種別・完全な SQL・バインドパラメータ・経過時間（ミリ秒）が 1 行で確認できます。
+操作種別・完全な SQL・バインドパラメータ（または件数）・経過時間（ミリ秒）が 1 行で確認できます。
 
 > INSERT / SELECT / UPDATE / DELETE / COUNT などすべての ORM 操作を捕捉します。
 > SQLite / MySQL の `bulk_create`（`executemany` 使用）はパフォーマンスのためクエリ層を
@@ -1358,8 +1369,8 @@ path = await migrator.autogenerate([User, Post], "./migrations", name="add_bio")
 # 2. 未適用のマイグレーションを一括適用
 n = await migrator.run_files("./migrations")
 
-# 3. 直近 1 件をロールバック
-await migrator.downgrade(steps=1)
+# 3. 直近 1 件をロールバック（DOWN SQL はファイルから読み込む）
+await migrator.downgrade(steps=1, directory="./migrations")
 
 # 適用履歴を確認
 for record in await migrator.history():
@@ -1380,6 +1391,16 @@ down = [
     "ALTER TABLE user DROP COLUMN bio",
 ]
 ```
+
+> **`downgrade()` には `directory=` を渡してください。** 指定すると DOWN SQL を
+> マイグレーションファイルから読み込み、`kakaorm_migrations` テーブルに保存された内容と
+> 照合します。一致しなければ何も実行せずに `RuntimeError` で中断します。省略すると
+> 保存済みの SQL をそのまま実行し、`FutureWarning` を出します（履歴テーブルに書き込める
+> 人がマイグレーション権限で任意の SQL を実行できてしまうため）。
+>
+> マイグレーションファイルは Python コードとして import されます。バージョン管理下に置き、
+> 信頼できるユーザーだけが書き込めるようにしてください。`autogenerate(name=...)` には
+> 英数字・`_`・`-` のみ使えます。
 
 ---
 
@@ -1417,7 +1438,7 @@ kakaorm showmigrations --db sqlite+aiosqlite:///./dev.db
 |---|---|
 | `init` | `migrations/` ディレクトリと設定ファイルを初期化する |
 | `makemigrations` | モデル定義と DB スキーマの差分をファイルに出力する |
-| `migrate` | 未適用マイグレーションを適用する（`--direction down` でロールバック） |
+| `migrate` | 未適用マイグレーションを適用する（`--direction down` でロールバック。DOWN SQL はマイグレーションディレクトリから読み込む） |
 | `showmigrations` | 適用履歴をテーブル形式で表示する |
 
 ---
@@ -1509,6 +1530,90 @@ TypeError: Column() does not accept positional arguments.
 
 ---
 
+### `limit()` / `offset()` に int 以外を渡した
+
+```python
+await Post.all().limit(request.query_params["limit"])   # str
+```
+
+```
+TypeError: limit must be an int, got str ('20'). Convert user input explicitly, e.g. int(request_value).
+ValueError: limit must be >= 0, got -1
+```
+
+`limit()` / `offset()` の値は SQL 文字列に直接書き込まれるため、0 以上の `int` だけを
+受け付けます（`bool`・`float`・`str` は拒否）。ユーザー入力は変換と上限チェックをしてから
+渡してください: `limit(min(int(q), 100))`
+
+---
+
+### `order_by()` の項が不正
+
+```python
+await Post.all().order_by(request.query_params["sort"])  # "views DESC; DROP TABLE post"
+```
+
+```
+ValueError: Invalid order_by term: 'views DESC; DROP TABLE post'.
+  Use a column expression: .order_by(User.name.asc, User.id.desc)
+  Plain strings must look like 'column', 'table.column', 'column DESC'.
+  Never pass unvalidated user input to order_by(); map it to a column first.
+```
+
+カラム式（`Post.views.desc`、`Count(Post.id).desc`、`Post.views` そのもの）は常に受け付けます。
+素の文字列は `column [ASC|DESC] [NULLS FIRST|LAST]` 形式のみです。ウィンドウ関数の
+`order_by=` / `partition_by=`、`select()` / `group_by()` に渡す文字列も同じ規則です。
+
+---
+
+### 識別子が不正（label / エイリアス / CTE 名 / テーブル名）
+
+```python
+Count(Post.id).label("n FROM post; --")
+await Post.all().aggregate(**{"total; --": Sum(Post.views)})
+Post.all().with_cte("x AS (SELECT 1)", qs)
+
+class Order(Model):
+    class Meta:
+        table_name = "[order]"
+```
+
+```
+ValueError: Invalid label: 'n FROM post; --'. Only letters, digits and underscores are allowed, and it must not start with a digit.
+ValueError: Invalid aggregate alias: 'total; --'. ...
+ValueError: Invalid CTE name: 'x AS (SELECT 1)'. ...
+ValueError: Invalid table name for Order: '[order]'. ...
+```
+
+識別子は SQL に埋め込まれるため、素の識別子である必要があります。予約語は問題ありません
+（テーブル名・カラム名は KakaORM が自動でクォートします）。
+
+---
+
+### DDL オプションが不正
+
+```
+ValueError: check='price > 0; DROP TABLE x' contains ';', which is not allowed in a CHECK expression.
+ValueError: Invalid on_delete: 'CASCADE; --'. Choose one of: CASCADE, NO ACTION, RESTRICT, SET DEFAULT, SET NULL
+TypeError: max_length must be an int, got str ('10')
+ValueError: Product.Meta.indexes references unknown column(s): ['nope']
+```
+
+---
+
+### マイグレーション履歴がファイルと一致しない
+
+```
+RuntimeError: DOWN SQL for '0003_add_bio' in kakaorm_migrations does not match 0003_add_bio.py. The history table may have been tampered with; aborting.
+FileNotFoundError: Migration file not found: /app/migrations/0003_add_bio.py. Refusing to execute DOWN SQL that only exists in the database.
+FutureWarning: downgrade() without directory= executes DOWN SQL stored in the kakaorm_migrations table as-is. ...
+```
+
+`downgrade(directory=...)` が出します。元のマイグレーションファイルをバージョン管理から
+復元するか、履歴テーブルを誰が変更したかを調査してください。
+
+---
+
 ## セキュリティ
 
 kakaorm はクエリの値を常にバインドパラメータとして扱い、SQL インジェクションを防止します。
@@ -1517,22 +1622,65 @@ kakaorm はクエリの値を常にバインドパラメータとして扱い、
 - **`update()` のカラム名** — `_meta.columns` に存在しないキーは `ValueError` で拒否します
 - **`insert_into()` の宛先カラム名** — 同様に `_meta.columns` でホワイトリスト検証します
 - **`create()` のフィールド名** — 未知のフィールドは `TypeError` で拒否します。近いフィールド名がある場合は候補を提示します
+- **`limit()` / `offset()`** — 0 以上の `int` のみ受け付けます（v0.4.8）
+- **`order_by()` / ウィンドウ関数の `order_by=` / `partition_by=`** — 素の文字列は `column [ASC|DESC] [NULLS FIRST|LAST]` 形式でホワイトリスト検証します。式はカラムオブジェクトから作ってください（v0.4.8）
+- **`Lag` / `Lead` の default** — バインドパラメータとして送出し、offset は `int` のみ受け付けます（v0.4.8）
+- **label・集計エイリアス・CTE 名・テーブル名・`select()` / `group_by()` の文字列列参照** — 素の識別子として検証します（v0.4.8）
+- **識別子のクォート** — 名前に含まれる引用符をエスケープします（PostgreSQL は `"` → `""`、MySQL は `` ` `` → ``` `` ```）。SQLite は `]` を含む名前を拒否します（v0.4.8）
+- **DDL オプション** — `on_delete` はホワイトリスト、`max_length` / `max_digits` / `decimal_places` は `int` のみ、`check=` は `;`・`--`・`/*` を拒否、`Meta.indexes` は存在するカラムのみ（v0.4.8）
+- **認証情報** — エラーメッセージと警告では接続 URL のパスワードを `***` に置き換えます。クエリログは `engine.query_log_params = True` にしない限りパラメータの値を出しません（v0.4.8）
+- **マイグレーション** — `downgrade(directory=...)` は DOWN SQL をファイルから読み、履歴テーブルの改ざんを検知します。`autogenerate(name=...)` はパストラバーサルを拒否します（v0.4.8）
+
+### 信頼境界
+
+次の入力は**設計上、開発者が管理するもの**であり、エンドユーザーの入力を渡してはいけません。
+
+| 入力 | 理由 |
+|---|---|
+| `check=` の式 | `CREATE TABLE` にそのまま埋め込まれる |
+| `engine.fetch()` / `execute()` の SQL 文字列 | Raw SQL。値は必ず `params` リストで渡す |
+| マイグレーションファイル、CLI の `--models` ファイル | Python コードとして import・実行される |
+| モデル / カラム定義 | テーブル名・カラム名になる |
 
 > **アプリ側の注意点**
 >
-> `order_by()` は生文字列をそのまま SQL に展開します。
-> ユーザー入力を ORDER BY に使う場合は、許可済みカラム名のみを受け付けるホワイトリストをアプリ側で実装してください。
+> ユーザー入力で ORDER BY を切り替える場合は、文字列をそのまま渡さずカラムオブジェクトに対応付けてください。
 >
 > ```python
-> ALLOWED = {"views", "title", "created_at"}
-> col = user_input if user_input in ALLOWED else "id"
-> results = await Post.all().order_by(f"{col} DESC")
+> SORTABLE = {"views": Post.views, "title": Post.title, "created_at": Post.created_at}
+> col = SORTABLE.get(user_input, Post.id)
+> results = await Post.all().order_by(col.desc)
 > ```
 >
-> また、`create()` / `save()` は既知フィールドへの書き込みを制限しません。
-> ユーザー入力から特権フィールド（`is_admin` など）を除外する処理はアプリ層で行ってください。
+> `create()` / `save()` / `update()` は未知のフィールドを拒否しますが、**既知の**特権フィールド
+> （`is_admin`・`role`・`id` など）への書き込みは制限しません。`**request.json()` をそのまま
+> 渡さず、許可リストからキーワード引数を組み立ててください。
+>
+> ```python
+> ALLOWED = {"name", "email"}
+> user = await User.create(**{k: v for k, v in payload.items() if k in ALLOWED})
+> ```
 
 ## アップグレードガイド
+
+### v0.4.7 → v0.4.8
+
+v0.4.8 はセキュリティリリースです。カラム式だけを使っているコードは変更不要です。
+以下は、これまで危険な SQL を組み立てていた箇所がエラーになるようになったものです。
+
+| 変更前 | 変更後 |
+|---|---|
+| `.limit("10")` | `.limit(int(value))` — 文字列は `TypeError` |
+| `.order_by("LOWER(name)")`、`.order_by("views DESC, (SELECT ...)")` | `column [ASC\|DESC]` 形式の文字列のみ。カラムオブジェクトを使う |
+| `.label("my label")`、`with_cte("x-y", qs)` | 素の識別子を使う（`my_label`、`x_y`） |
+| `Meta.table_name = "[order]"` | `Meta.table_name = "order"`（クォートは自動） |
+| `ForeignKey(..., on_delete="cascade")` | 引き続き動作（`CASCADE` に正規化）。未知のアクションは `ValueError` |
+| `migrator.downgrade(steps=1)` | `migrator.downgrade(steps=1, directory="./migrations")` — 旧形式も動作するが `FutureWarning` |
+| `downgrade(steps=0)` で**全件**ロールバックされていた | `steps=0` は何もしない |
+| クエリログにパラメータの値が出ていた | 値は伏せ字。表示するには `engine.query_log_params = True` |
+| `Lag(col, 1, 0)` が DB によって `'0'`（文字列）を返していた | `default` はバインドパラメータになり Python の型を保つ |
+
+---
 
 ### v0.4.1 → v0.4.2
 
@@ -1609,13 +1757,14 @@ class Order(Model):
         table_name = "order"  # KakaORM が自動的にクォート
 ```
 
-> **手動でクォートしないでください。** クォート文字を自分で付けると二重クォートが発生します：
+> **手動でクォートしないでください。** v0.4.8 以降、テーブル名は素の識別子（英数字・`_`）
+> でなければならず、クォート文字を含めるとクラス定義時に `ValueError` になります：
 >
 > ```python
 > class Meta:
->     table_name = "[order]"   # ❌ SQLite で [[order]] になる
->     table_name = '"order"'   # ❌ 手動クォートは不要
->     table_name = '`order`'   # ❌ 手動クォートは不要
+>     table_name = "[order]"   # ❌ ValueError: Invalid table name
+>     table_name = '"order"'   # ❌ ValueError
+>     table_name = '`order`'   # ❌ ValueError
 > ```
 >
 > 可能であれば予約語を避けた命名を推奨します（例: `order` の代わりに `orders`）。

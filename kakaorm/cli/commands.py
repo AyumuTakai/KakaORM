@@ -97,7 +97,9 @@ async def migrate_command(
         migrator = VersionedMigrator(engine)
 
         if direction == "down":
-            count = await migrator.downgrade(steps=steps)
+            count = await migrator.downgrade(
+                steps=steps, directory=str(config.get_migration_dir())
+            )
             typer.echo(f"✓ Rolled back {count} migration(s)")
         else:
             count = await migrator.run_files(str(config.get_migration_dir()), verbose=True)
