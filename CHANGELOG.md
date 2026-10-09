@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-10-10
+
+Maintenance release that brings PyPI in line with `main` after the v0.4.8 lint cleanup.
+
+### Changed
+
+- `Engine.__aenter__` is annotated as returning `Self`, so `async with AioSQLiteEngine(...) as e`
+  infers the concrete engine type.
+- Type annotations modernised (PEP 585 / 604), imports sorted; no API changes.
+- Dev dependency pinned to `ruff==0.17.0` so lint results in CI are reproducible.
+
+### Fixed
+
+- `AioSQLiteEngine.truncate()` swallowed every exception while resetting `sqlite_sequence`;
+  it now ignores only `sqlite3.OperationalError` (table absent).
+- `VersionedMigrator.ensure_history_table()` silently ignored a failure to add the
+  `down_sql` column; it is now logged as a warning on the `kakaorm.migration` logger.
+
+### Removed
+
+- Stray top-level `__init__.py` (an outdated copy of `engine.py` from the initial commit).
+  It was never importable as part of `kakaorm`, but was shipped in the sdist and made
+  `ruff` report `N999` when the repository is checked out as `KakaORM/`.
+
 ## [0.4.8] - 2026-10-10
 
 Security release. See "Upgrade Guide → v0.4.7 → v0.4.8" in `docs/REFERENCE.md`.
