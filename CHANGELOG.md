@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.10] - 2026-10-10
+
+### Changed
+
+- Archiving an `ArchiveModel` row now first archives, in the same transaction and recursively,
+  every `ArchiveModel` child that references it with `ForeignKey(..., on_delete="CASCADE")`.
+  Previously the main table's `ON DELETE CASCADE` physically deleted the active children.
+  `restore()` does not cascade.
+
+### Fixed
+
+- Archive tables (`engine.create_archive_table()` and `autogenerate()`) copied the
+  `REFERENCES ... ON DELETE CASCADE` of `ForeignKey` columns, so archiving or deleting a parent
+  physically deleted already-archived children and they could not be restored. `ForeignKey`
+  columns are now plain `INTEGER` in archive tables. Existing archive tables must be fixed
+  manually — see the v0.4.9 → v0.4.10 Upgrade Guide.
+- `create_archive_table()` emitted `archived_at ... NOT NULL NOT NULL`.
+
 ## [0.4.9] - 2026-10-10
 
 Maintenance release that brings PyPI in line with `main` after the v0.4.8 lint cleanup.

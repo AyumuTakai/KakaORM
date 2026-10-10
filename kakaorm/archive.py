@@ -31,7 +31,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, Self, TypeVar
 
-from kakaorm.columns.base import WhereClause
+from kakaorm.columns.base import Column, WhereClause
 from kakaorm.model import Model
 from kakaorm.query import QuerySet
 from kakaorm.soft_delete import DELETED_EXCLUDE, DELETED_INCLUDE, DELETED_ONLY
@@ -40,6 +40,68 @@ T = TypeVar("T", bound="ArchiveModel")
 
 _ARCHIVE_PREFIX = "archive_"
 _ARCHIVED_AT    = "archived_at"
+
+
+def archive_columns(model_cls: Any) -> dict[str, Column]:
+    """アーカイブテーブルのカラム定義（archived_at を含む）を返す。
+
+    メインテーブルの定義を引き継ぐが、次の2点を変える:
+
+    - auto_increment の主キーは通常の IntColumn にする（元の id を保持するため）
+    - ForeignKey は REFERENCES なしの IntColumn にする。アーカイブ行は親行より
+      長く残る前提なので、ON DELETE CASCADE で一緒に消えたり、親の削除を
+      RESTRICT で妨げたりしてはいけない
+    """
+    from kakaorm.columns.types import DateTimeColumn, ForeignKey, IntColumn
+
+    cols: dict[str, Column] = {}
+    for col_name, col in model_cls._meta.columns.items():
+        if getattr(col, "auto_increment", False) or isinstance(col, ForeignKey):
+            new_col = IntColumn(
+                primary_key=col.primary_key,
+                nullable=col.nullable,
+                default=col.default,
+                unique=col.unique,
+                index=col.index,
+                check=col.check,
+            )
+            new_col._name = col_name
+            cols[col_name] = new_col
+        else:
+            cols[col_name] = col
+
+    archived_at_col = DateTimeColumn(nullable=False)
+    archived_at_col._name = _ARCHIVED_AT
+    cols[_ARCHIVED_AT] = archived_at_col
+    return cols
+
+
+#: カスケードアーカイブで子行を絞り込む IN (...) 1回あたりの主キー数（バインド変数の上限対策）
+_CASCADE_CHUNK = 500
+
+
+def _cascade_children(model_cls: Any) -> list[tuple[type[ArchiveModel], str]]:
+    """model_cls を ON DELETE CASCADE で参照する ArchiveModel サブクラスと FK 列名の一覧。"""
+    from kakaorm.columns.types import ForeignKey
+
+    table = model_cls._meta.table_name
+    result: list[tuple[type[ArchiveModel], str]] = []
+    stack: list[type[ArchiveModel]] = list(ArchiveModel.__subclasses__())
+    visited: set[type[ArchiveModel]] = set()
+    while stack:
+        sub = stack.pop()
+        if sub in visited:
+            continue
+        visited.add(sub)
+        stack.extend(sub.__subclasses__())
+        for col_name, col in sub._meta.columns.items():
+            if (
+                isinstance(col, ForeignKey)
+                and col.on_delete == "CASCADE"
+                and col._resolve_table() == table
+            ):
+                result.append((sub, col_name))
+    return result
 
 
 class ArchiveQuerySet(QuerySet[T]):
@@ -255,6 +317,18 @@ class ArchiveQuerySet(QuerySet[T]):
 
         INSERT INTO archive_table SELECT ... FROM main WHERE ...
         の後に DELETE FROM main WHERE ... をトランザクションで実行。
+
+        ``ForeignKey(..., on_delete="CASCADE")`` でこのモデルを参照している
+        ArchiveModel の子行は、同じトランザクション内で先にアーカイブする
+        （メインテーブルの CASCADE で物理削除されるのを防ぐため）。
+        """
+        async with self._engine.transaction():
+            return await self._archive_rows(datetime.now(UTC), {})
+
+    async def _archive_rows(self, now: datetime, seen: dict[str, set[Any]]) -> int:
+        """delete() の本体。トランザクションは呼び出し側が張る（子への再帰でネストさせないため）。
+
+        seen はテーブルごとのアーカイブ処理中の主キー集合で、自己参照 FK の循環を止める。
         """
         main    = self._main_table()
         archive = self._archive_table()
@@ -270,7 +344,24 @@ class ArchiveQuerySet(QuerySet[T]):
         )
 
         where_sql, where_params = self._merge_clauses(self._where, "WHERE")
-        now = datetime.now(UTC)
+
+        children = _cascade_children(self._model)
+        if children:
+            pk_name = self._model._meta.pk_name
+            q_pk = engine.quote_identifier(pk_name)
+            rows = await engine._fetch(
+                f"SELECT {q_main}.{q_pk} FROM {q_main}{where_sql}", list(where_params)
+            )
+            in_progress = seen.setdefault(main, set())
+            ids = [r[pk_name] for r in rows if r[pk_name] not in in_progress]
+            if not ids:
+                return 0
+            in_progress.update(ids)
+            for child_cls, fk_name in children:
+                fk = getattr(child_cls, fk_name)
+                for i in range(0, len(ids), _CASCADE_CHUNK):
+                    chunk = ids[i:i + _CASCADE_CHUNK]
+                    await child_cls.all().where(fk.in_(chunk))._archive_rows(now, seen)
 
         insert_sql = (
             f"INSERT INTO {q_archive} ({col_list}, {q_archived_at}) "
@@ -278,10 +369,8 @@ class ArchiveQuerySet(QuerySet[T]):
         )
         delete_sql = f"DELETE FROM {q_main}{where_sql}"
 
-        async with engine.transaction():
-            count = await engine._execute(insert_sql, [now] + list(where_params))
-            await engine._execute(delete_sql, list(where_params))
-
+        count = await engine._execute(insert_sql, [now] + list(where_params))
+        await engine._execute(delete_sql, list(where_params))
         return count
 
     async def restore(self) -> int:

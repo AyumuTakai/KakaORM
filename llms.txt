@@ -1,7 +1,7 @@
 # KakaORM
 
 > Async-native ORM for PostgreSQL, SQLite, and MySQL/MariaDB.
-> Version: 0.4.9 | Python 3.11+ | asyncio only
+> Version: 0.4.10 | Python 3.11+ | asyncio only
 
 ---
 
@@ -373,6 +373,12 @@ await post.delete()                            # sets deleted_at
 posts = await Post.all()                       # excludes deleted
 posts = await Post.all().include_deleted()     # includes deleted
 await post.restore()                           # clears deleted_at
+
+class Comment(ArchiveModel):   # delete() moves rows to archive_comment
+    post_id = ForeignKey(Post, on_delete="CASCADE")
+await engine.create_archive_table(Comment)     # archive tables have no FK constraints
+await post.delete()   # if Post is an ArchiveModel: CASCADE children are archived first
+await comment.restore()                        # restore does not cascade
 ```
 
 ---

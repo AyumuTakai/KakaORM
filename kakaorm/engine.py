@@ -408,26 +408,15 @@ class Engine(ABC):
             await engine.create_archive_table(Log)
             # → archive_log テーブルが作成される
         """
-        from kakaorm.columns.types import DateTimeColumn, IntColumn
+        from kakaorm.archive import archive_columns
 
-        meta = model_cls._meta
         archive_table = model_cls._archive_table_name()
         exists = "IF NOT EXISTS " if if_not_exists else ""
 
         col_defs: list[str] = []
-        for col_name, col in meta.columns.items():
-            if getattr(col, "auto_increment", False):
-                archive_col = IntColumn(primary_key=col.primary_key, nullable=col.nullable)
-                archive_col._name = col_name
-                ddl = self._adapt_ddl(archive_col.ddl_fragment(quote_fn=self.quote_identifier))
-            else:
-                ddl = self._adapt_ddl(col.ddl_fragment(quote_fn=self.quote_identifier))
+        for col_name, col in archive_columns(model_cls).items():
+            ddl = self._adapt_ddl(col.ddl_fragment(quote_fn=self.quote_identifier))
             col_defs.append(f"  {self.quote_identifier(col_name)} {ddl}")
-
-        archived_at_col = DateTimeColumn(nullable=False)
-        archived_at_col._name = "archived_at"
-        archived_at_ddl = self._adapt_ddl(archived_at_col.ddl_fragment(quote_fn=self.quote_identifier))
-        col_defs.append(f"  {self.quote_identifier('archived_at')} {archived_at_ddl} NOT NULL")
 
         col_defs = self._post_process_col_defs(col_defs)
         quoted_table = self.quote_identifier(archive_table)

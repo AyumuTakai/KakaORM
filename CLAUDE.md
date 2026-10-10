@@ -7,7 +7,7 @@
 
 ## 現在バージョン
 
-**v0.4.9**（`kakaorm/__init__.py` と `pyproject.toml` の両方に記載）
+**v0.4.10**（`kakaorm/__init__.py` と `pyproject.toml` の両方に記載）
 
 ---
 

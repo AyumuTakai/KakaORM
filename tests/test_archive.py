@@ -8,7 +8,7 @@ import pytest
 import pytest_asyncio
 
 import kakaorm
-from kakaorm import IntColumn, StrColumn, Migrator, VersionedMigrator
+from kakaorm import ForeignKey, IntColumn, StrColumn, Migrator, VersionedMigrator
 from kakaorm.archive import ArchiveModel
 
 
@@ -241,3 +241,113 @@ async def test_autogenerate_no_diff_when_tables_exist(tmp_path):
         assert path is None  # 差分なし → ファイル生成なし
     finally:
         await eng.disconnect()
+
+
+# ── 外部キー: アーカイブテーブルの FK 除去とカスケードアーカイブ ──
+
+
+class ArPost(ArchiveModel):
+    title = StrColumn(nullable=False)
+
+    class Meta:
+        table_name = "ar_post"
+
+
+class ArComment(ArchiveModel):
+    post_id   = ForeignKey("ar_post", on_delete="CASCADE")
+    parent_id = ForeignKey("ar_comment", on_delete="CASCADE", nullable=True)
+    body      = StrColumn(nullable=False)
+
+    class Meta:
+        table_name = "ar_comment"
+
+
+class ArLike(ArchiveModel):
+    post_id = ForeignKey("ar_post", on_delete="SET NULL", nullable=True)
+
+    class Meta:
+        table_name = "ar_like"
+
+
+@pytest_asyncio.fixture
+async def fk_engine():
+    eng = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
+    for m in (ArPost, ArComment, ArLike):
+        await eng.create_table(m)
+        await eng.create_archive_table(m)
+    yield eng
+    await eng.disconnect()
+
+
+async def _table_sql(eng, name):
+    rows = await eng._fetch("SELECT sql FROM sqlite_master WHERE name = %s", [name])
+    return rows[0]["sql"]
+
+
+@pytest.mark.asyncio
+async def test_archive_table_has_no_foreign_keys(fk_engine):
+    assert "REFERENCES" in await _table_sql(fk_engine, "ar_comment")
+    assert "REFERENCES" not in await _table_sql(fk_engine, "archive_ar_comment")
+
+
+@pytest.mark.asyncio
+async def test_autogenerate_archive_table_has_no_foreign_keys(tmp_path):
+    eng = await kakaorm.connect("sqlite+aiosqlite:///:memory:")
+    try:
+        migrator = VersionedMigrator(eng)
+        path = await migrator.autogenerate([ArPost, ArComment], str(tmp_path), name="fk")
+        content = path.read_text()
+        [archive_ddl] = [
+            line for line in content.splitlines()
+            if "CREATE TABLE IF NOT EXISTS [archive_ar_comment]" in line
+        ]
+        assert "REFERENCES" not in archive_ddl
+    finally:
+        await eng.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_archiving_parent_keeps_already_archived_children(fk_engine):
+    post = await ArPost.create(title="p")
+    c = await ArComment.create(post_id=post.id, body="old")
+    await c.delete()
+
+    await post.delete()
+
+    archived = await ArComment.only_deleted()
+    assert [x.body for x in archived] == ["old"]
+
+
+@pytest.mark.asyncio
+async def test_archiving_parent_cascades_to_active_children(fk_engine):
+    post  = await ArPost.create(title="p")
+    other = await ArPost.create(title="other")
+    c1    = await ArComment.create(post_id=post.id, body="c1")
+    reply = await ArComment.create(post_id=post.id, parent_id=c1.id, body="reply")
+    keep  = await ArComment.create(post_id=other.id, body="keep")
+
+    assert await ArPost.where(ArPost.id == post.id).delete() == 1
+
+    assert [x.id for x in await ArComment.all()] == [keep.id]
+    archived = sorted(x.id for x in await ArComment.only_deleted())
+    assert archived == sorted([c1.id, reply.id])
+
+    # 親を戻せば子も個別に復元できる
+    await post.restore()
+    await c1.restore()
+    await reply.restore()
+    assert await ArComment.where(ArComment.post_id == post.id).count() == 2
+    assert await ArComment.only_deleted().count() == 0
+
+
+@pytest.mark.asyncio
+async def test_archiving_parent_does_not_cascade_non_cascade_fk(fk_engine):
+    post = await ArPost.create(title="p")
+    like = await ArLike.create(post_id=post.id)
+
+    await post.delete()
+
+    rows = await ArLike.all()
+    assert [x.id for x in rows] == [like.id]
+    assert rows[0].post_id is None  # メインテーブルの SET NULL が効く
+    assert await ArLike.only_deleted().count() == 0

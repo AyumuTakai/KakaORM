@@ -1204,6 +1204,36 @@ await log.restore()
 await Log.only_deleted().purge()
 ```
 
+### Foreign keys and cascade archiving
+
+Archive tables never carry `REFERENCES` constraints: a `ForeignKey` column is copied as a plain
+`INTEGER`. Archived rows are meant to outlive their parents, so they must not be removed by
+`ON DELETE CASCADE` or block a parent's deletion.
+
+When an `ArchiveModel` row is archived, every `ArchiveModel` child that references it with
+`ForeignKey(..., on_delete="CASCADE")` is archived first, in the same transaction and
+recursively (grandchildren, self-referencing replies, ...). Without this, the main table's
+`ON DELETE CASCADE` would physically delete the active children.
+
+```python
+class Post(ArchiveModel):
+    title = StrColumn()
+
+class Comment(ArchiveModel):
+    post_id = ForeignKey(Post, on_delete="CASCADE")
+    body    = StrColumn()
+
+await post.delete()   # active comments of the post → archive_comment, then post → archive_post
+```
+
+- Only `ArchiveModel` children with `on_delete="CASCADE"` are cascaded. Plain `Model` /
+  `SoftDeleteModel` children and other actions (`SET NULL`, `RESTRICT`, ...) keep the main
+  table's normal FK behavior.
+- `restore()` does **not** cascade. Restore the parent first, then the children you need
+  (restoring a child whose parent is still archived fails with an FK error).
+- The cascade runs for `delete()` on instances and querysets; `before_delete` / `after_delete`
+  hooks are not called for cascaded children.
+
 ### autogenerate integration
 
 `ArchiveModel` subclasses are automatically included in the archive table diff when running `autogenerate()`.
@@ -1666,6 +1696,35 @@ The following inputs are **developer-controlled by design** and must never come 
 > ```
 
 ## Upgrade Guide
+
+### v0.4.9 → v0.4.10
+
+**Archive tables no longer have foreign keys.** Tables created by v0.4.9 or earlier copied the
+`REFERENCES ... ON DELETE CASCADE` of `ForeignKey` columns, so archiving (or deleting) a parent
+physically deleted the archived children. New archive tables are created without FKs, but
+existing ones are **not** changed automatically — `autogenerate()` does not detect FK
+constraints. Drop them once per archive table that has a `ForeignKey` column:
+
+```python
+# SQLite: constraints cannot be dropped, so rebuild the table
+await engine.execute("ALTER TABLE archive_comment RENAME TO archive_comment_old")
+await engine.create_archive_table(Comment)
+await engine.execute("INSERT INTO archive_comment SELECT * FROM archive_comment_old")
+await engine.execute("DROP TABLE archive_comment_old")
+```
+
+```sql
+-- PostgreSQL (default constraint name: {table}_{column}_fkey)
+ALTER TABLE archive_comment DROP CONSTRAINT archive_comment_post_id_fkey;
+-- MySQL / MariaDB: check SHOW CREATE TABLE archive_comment for the name, then
+ALTER TABLE archive_comment DROP FOREIGN KEY archive_comment_ibfk_1;
+```
+
+**Cascade archiving.** Archiving an `ArchiveModel` row now also archives its `ArchiveModel`
+children that use `on_delete="CASCADE"` (they used to be physically deleted). If you archived
+children manually before archiving the parent, that code keeps working and can be removed.
+
+---
 
 ### v0.4.7 → v0.4.8
 

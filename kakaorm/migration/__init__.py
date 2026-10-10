@@ -416,35 +416,18 @@ class Migrator:
         プロキシオブジェクトを返す。
 
         アーカイブテーブルは:
-          - メインテーブルと同じカラム構成（id は auto_increment なし）
+          - メインテーブルと同じカラム構成（id は auto_increment なし、外部キー制約なし）
           - archived_at TEXT カラムが追加される
         """
-        from kakaorm.columns.base import Column
-        from kakaorm.columns.types import DateTimeColumn
+        from kakaorm.archive import archive_columns
         from kakaorm.model import ModelMeta
 
         main_meta  = model_cls._meta
         archive_table = model_cls._archive_table_name()
 
-        # id カラムの auto_increment を無効にしたコピーを作る
-        archive_columns: dict[str, Column] = {}
-        for col_name, col in main_meta.columns.items():
-            if getattr(col, "auto_increment", False):
-                from kakaorm.columns.types import IntColumn
-                new_col = IntColumn(primary_key=col.primary_key, nullable=col.nullable)
-                new_col._name = col_name
-                archive_columns[col_name] = new_col
-            else:
-                archive_columns[col_name] = col
-
-        # archived_at カラムを追加
-        archived_at_col = DateTimeColumn(nullable=False)
-        archived_at_col._name = "archived_at"
-        archive_columns["archived_at"] = archived_at_col
-
         archive_meta = ModelMeta(
             table_name=archive_table,
-            columns=archive_columns,
+            columns=archive_columns(model_cls),
             pk_name=main_meta.pk_name,
         )
         archive_meta._engine = getattr(model_cls, "_engine", None)

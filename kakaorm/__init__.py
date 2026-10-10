@@ -1,4 +1,4 @@
-__version__ = "0.4.9"
+__version__ = "0.4.10"
 
 from kakaorm.archive import ArchiveModel
 from kakaorm.columns.base import (

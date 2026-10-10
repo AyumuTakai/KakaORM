@@ -1201,6 +1201,35 @@ await log.restore()
 await Log.only_deleted().purge()
 ```
 
+### 外部キーとカスケードアーカイブ
+
+アーカイブテーブルには `REFERENCES` 制約を付けません。`ForeignKey` 列はただの `INTEGER` として
+コピーされます。アーカイブ行は親より長く残る前提なので、`ON DELETE CASCADE` で一緒に消えたり、
+親の削除を妨げたりしてはいけないためです。
+
+`ArchiveModel` の行をアーカイブすると、`ForeignKey(..., on_delete="CASCADE")` でその行を参照している
+`ArchiveModel` の子行も、同じトランザクション内で先に（孫・自己参照の返信なども再帰的に）アーカイブされます。
+これがないと、メインテーブルの `ON DELETE CASCADE` によってアクティブな子行が物理削除されてしまいます。
+
+```python
+class Post(ArchiveModel):
+    title = StrColumn()
+
+class Comment(ArchiveModel):
+    post_id = ForeignKey(Post, on_delete="CASCADE")
+    body    = StrColumn()
+
+await post.delete()   # 投稿のアクティブなコメント → archive_comment、続いて投稿 → archive_post
+```
+
+- カスケードするのは `on_delete="CASCADE"` の `ArchiveModel` の子だけです。通常の `Model` /
+  `SoftDeleteModel` の子や、ほかのアクション（`SET NULL` / `RESTRICT` など）はメインテーブルの
+  通常の FK 動作のままです。
+- `restore()` はカスケード**しません**。親を先に復元してから、必要な子を復元してください
+  （親がアーカイブされたままの子を復元すると FK エラーになります）。
+- インスタンスと QuerySet の `delete()` の両方でカスケードします。カスケードされた子に対しては
+  `before_delete` / `after_delete` フックは呼ばれません。
+
 ### autogenerate との連携
 
 `ArchiveModel` サブクラスは `autogenerate()` 実行時にアーカイブテーブルも自動的に差分計算の対象に含まれます。
@@ -1662,6 +1691,35 @@ kakaorm はクエリの値を常にバインドパラメータとして扱い、
 > ```
 
 ## アップグレードガイド
+
+### v0.4.9 → v0.4.10
+
+**アーカイブテーブルから外部キーがなくなりました。** v0.4.9 以前に作成したアーカイブテーブルは
+`ForeignKey` 列の `REFERENCES ... ON DELETE CASCADE` を引き継いでいたため、親をアーカイブ（または削除）
+するとアーカイブ済みの子が物理削除されていました。新しく作るアーカイブテーブルには FK が付きませんが、
+既存のテーブルは自動では変更**されません**（`autogenerate()` は FK 制約の差分を検出しません）。
+`ForeignKey` 列を持つアーカイブテーブルごとに、一度だけ FK を削除してください。
+
+```python
+# SQLite: 制約を削除できないためテーブルを作り直す
+await engine.execute("ALTER TABLE archive_comment RENAME TO archive_comment_old")
+await engine.create_archive_table(Comment)
+await engine.execute("INSERT INTO archive_comment SELECT * FROM archive_comment_old")
+await engine.execute("DROP TABLE archive_comment_old")
+```
+
+```sql
+-- PostgreSQL（既定の制約名: {table}_{column}_fkey）
+ALTER TABLE archive_comment DROP CONSTRAINT archive_comment_post_id_fkey;
+-- MySQL / MariaDB: SHOW CREATE TABLE archive_comment で制約名を確認してから
+ALTER TABLE archive_comment DROP FOREIGN KEY archive_comment_ibfk_1;
+```
+
+**カスケードアーカイブ。** `ArchiveModel` の行をアーカイブすると、`on_delete="CASCADE"` で参照している
+`ArchiveModel` の子もアーカイブされるようになりました（以前は物理削除されていました）。
+親より先に子を手動でアーカイブしていたコードはそのまま動きますが、不要になります。
+
+---
 
 ### v0.4.7 → v0.4.8
 
